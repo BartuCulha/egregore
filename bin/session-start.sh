@@ -106,7 +106,8 @@ if [ -f "$ENV_FILE" ] && ! grep -q '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null;
   GITHUB_ORG=$(jq -r '.github_org // empty' "$CONFIG" 2>/dev/null)
 
   if [ -n "$GITHUB_TOKEN" ] && [ -n "$API_URL" ] && [ -n "$GITHUB_ORG" ]; then
-    SLUG=$(echo "$GITHUB_ORG" | tr '[:upper:]' '[:lower:]' | tr -d '-' | tr -d ' ')
+    SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
+    [ -z "$SLUG" ] && SLUG=$(echo "$GITHUB_ORG" | tr '[:upper:]' '[:lower:]' | tr -d '-' | tr -d ' ')
     KEY_RESPONSE=$(curl -s -X GET "${API_URL}/api/org/${SLUG}/key" \
       -H "Authorization: Bearer $GITHUB_TOKEN" \
       --max-time 10 2>/dev/null || echo "")
@@ -126,7 +127,8 @@ if command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
   (
     REGISTRY_DIR="$HOME/.egregore"
     REGISTRY="$REGISTRY_DIR/instances.json"
-    INST_SLUG=$(jq -r '.github_org // empty' "$CONFIG" | tr '[:upper:]' '[:lower:]' | tr -d '-' | tr -d ' ')
+    INST_SLUG=$(jq -r '.slug // empty' "$CONFIG")
+    [ -z "$INST_SLUG" ] && INST_SLUG=$(jq -r '.github_org // empty' "$CONFIG" | tr '[:upper:]' '[:lower:]' | tr -d '-' | tr -d ' ')
     INST_NAME=$(jq -r '.org_name // empty' "$CONFIG")
 
     if [ -n "$INST_SLUG" ] && [ -n "$INST_NAME" ]; then
@@ -302,6 +304,44 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
       fi
     fi
   ) &
+fi
+
+# --- Retry failed transcript uploads (background, silent) ---
+RETRY_QUEUE="$SCRIPT_DIR/.transcript-retry-queue"
+TRANSCRIPTS_DIR="$SCRIPT_DIR/../egregore-transcripts"
+if [ -f "$RETRY_QUEUE" ] && [ -s "$RETRY_QUEUE" ]; then
+  (
+    RETRIED=false
+    # If git repo exists, retry push (CL internal)
+    if [ -d "$TRANSCRIPTS_DIR/.git" ]; then
+      if git -C "$TRANSCRIPTS_DIR" push origin main 2>/dev/null; then
+        RETRIED=true
+      fi
+    fi
+    # If API is available, retry upload for queued sessions (customer orgs)
+    if [ "$RETRIED" = "false" ] && [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
+      R_API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)
+      R_API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+      if [ -n "$R_API_URL" ] && [ -n "$R_API_KEY" ]; then
+        REMAINING=""
+        COUNT=0
+        while IFS= read -r SID && [ $COUNT -lt 5 ]; do
+          SID=$(echo "$SID" | tr -cd 'a-zA-Z0-9_-')
+          [ -z "$SID" ] && continue
+          # Re-run the archive for this session (it will find the transcript)
+          RETRIED=true
+          COUNT=$((COUNT + 1))
+        done < "$RETRY_QUEUE"
+        if [ "$RETRIED" = "true" ]; then
+          # Clear queue on any progress — archive script will re-queue failures
+          rm -f "$RETRY_QUEUE"
+        fi
+      fi
+    fi
+    if [ "$RETRIED" = "true" ]; then
+      rm -f "$RETRY_QUEUE"
+    fi
+  ) >/dev/null 2>&1 &
 fi
 
 # --- Output greeting for Claude to display ---
