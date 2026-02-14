@@ -558,6 +558,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 created_by=user["login"],
                 transcript_sharing=body.transcript_sharing,
             )
+            sb.revoke_api_key(slug)  # Idempotent: revoke any old keys before creating new
             sb.create_api_key(slug, api_key)
             sb.upsert_user(user["login"], github_name=user.get("name"), avatar_url=user.get("avatar_url"))
             sb.add_membership(slug, user["login"], role="admin")
