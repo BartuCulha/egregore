@@ -37,6 +37,7 @@ class OrgSetup(BaseModel):
     telegram_chat_id: Optional[str] = None
     repos: list[str] = []
     instance_name: Optional[str] = None
+    transcript_sharing: bool = False
 
 
 class OrgJoin(BaseModel):

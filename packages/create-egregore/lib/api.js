@@ -79,8 +79,8 @@ class EgregoreAPI {
     });
   }
 
-  async setupOrg(githubToken, { github_org, org_name, is_personal = false, repos = [], instance_name }) {
-    const body = { github_org, org_name, is_personal, repos };
+  async setupOrg(githubToken, { github_org, org_name, is_personal = false, repos = [], instance_name, transcript_sharing = false }) {
+    const body = { github_org, org_name, is_personal, repos, transcript_sharing };
     if (instance_name) body.instance_name = instance_name;
     return request("POST", `${this.base}/api/org/setup`, {
       headers: { Authorization: `Bearer ${githubToken}` },

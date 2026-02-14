@@ -20,7 +20,7 @@ function run(cmd, opts = {}) {
  * @param {string} targetDir - where to install (default: cwd)
  */
 async function install(data, ui, targetDir) {
-  const { fork_url, memory_url, github_token, org_name, github_org, slug, api_key, repos = [], telegram_group_link, github_username, github_name } = data;
+  const { fork_url, memory_url, github_token, org_name, github_org, slug, api_key, repos = [], telegram_group_link, github_username, github_name, transcript_sharing } = data;
   const base = targetDir || process.cwd();
 
   // Directory name from fork URL (what git clone would use), e.g. "egregore-core"
@@ -108,6 +108,9 @@ async function install(data, ui, targetDir) {
     state.github_name = github_name || github_username;
   }
   state.onboarding_complete = true;
+  if (transcript_sharing !== undefined) {
+    state.transcript_sharing = transcript_sharing;
+  }
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
 
   // 5. Register instance + shell alias

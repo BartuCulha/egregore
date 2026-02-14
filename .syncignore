@@ -35,6 +35,10 @@ egregore-graph.html
 # CL-internal infrastructure
 site
 site 2
+egregore-site
+netlify.toml
+scripts
+eval-specs
 api
 ascii-oracle
 blog
@@ -48,7 +52,6 @@ DEV.md
 TELEGRAM_BOT_PLAN.md
 bin/preflight.sh
 bin/deploy-site.sh
-bin/transcript-archive.sh
 bin/transcript-backfill.sh
 bin/seeds
 

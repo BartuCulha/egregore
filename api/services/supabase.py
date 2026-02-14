@@ -72,6 +72,7 @@ def create_org(
     neo4j_password: str = "",
     telegram_chat_id: Optional[str] = None,
     created_by: Optional[str] = None,
+    transcript_sharing: bool = False,
 ) -> dict:
     """Create a new org. Returns the created org row."""
     data = {
@@ -82,6 +83,7 @@ def create_org(
         "neo4j_user": neo4j_user,
         "neo4j_password": neo4j_password,
         "created_by": created_by,
+        "transcript_sharing": transcript_sharing,
     }
     if telegram_chat_id:
         data["telegram_chat_id"] = telegram_chat_id
@@ -406,6 +408,23 @@ def waitlist_approve(waitlist_id: int, approved_by_username: str) -> Optional[di
 # =============================================================================
 # TELEGRAM EVENT LOGGING
 # =============================================================================
+
+
+def upload_transcript(org_slug: str, storage_path: str, file_data: bytes) -> str:
+    """Upload a gzipped transcript to Supabase Storage.
+
+    Bucket: egregore-transcripts (private).
+    Path: transcripts/{slug}/{YYYY-MM}/{session_id}.jsonl.gz
+    Returns the storage path on success.
+    """
+    client = get_client()
+    bucket = client.storage.from_("egregore-transcripts")
+    bucket.upload(
+        path=storage_path,
+        file=file_data,
+        file_options={"content-type": "application/gzip", "upsert": "true"},
+    )
+    return storage_path
 
 
 def log_telegram_event(

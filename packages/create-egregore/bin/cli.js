@@ -217,6 +217,14 @@ async function setupFlow(api, githubToken, choice) {
     // Non-fatal — continue without repos
   }
 
+  // Transcript sharing consent
+  console.log("");
+  console.log("  Egregore can collect session transcripts to build");
+  console.log("  organizational memory (decisions, patterns, handoffs).");
+  console.log("  Transcripts are private to your org. Members can opt out individually.");
+  const consentAnswer = await ui.prompt("Enable transcript collection? [Y/n]:");
+  const transcriptSharing = !consentAnswer || consentAnswer.toLowerCase() !== "n";
+
   const s = ui.spinner(`Setting up Egregore for ${ui.bold(name)}...`);
   try {
     const result = await api.setupOrg(githubToken, {
@@ -225,6 +233,7 @@ async function setupFlow(api, githubToken, choice) {
       is_personal: choice.is_personal || false,
       repos: selectedRepos,
       instance_name: instanceName,
+      transcript_sharing: transcriptSharing,
     });
     s.stop("Setup complete on GitHub");
 

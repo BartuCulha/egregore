@@ -15,7 +15,7 @@ import secrets
 from dotenv import load_dotenv
 load_dotenv(override=False)
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import (
@@ -543,6 +543,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
         "telegram_bot_token": default_bot_token,
         "telegram_chat_id": body.telegram_chat_id or "",
         "slug": slug,
+        "transcript_sharing": body.transcript_sharing,
     }
 
     # 6. Persist org — Supabase first (if enabled), then Neo4j, then in-memory
@@ -555,6 +556,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 neo4j_password=default_neo4j_password,
                 telegram_chat_id=body.telegram_chat_id,
                 created_by=user["login"],
+                transcript_sharing=body.transcript_sharing,
             )
             sb.create_api_key(slug, api_key)
             sb.upsert_user(user["login"], github_name=user.get("name"), avatar_url=user.get("avatar_url"))
@@ -567,8 +569,10 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
     try:
         neo4j_result = await execute_query(new_org, """
             MERGE (o:Org {id: $_org})
-            SET o.name = $name, o.github_org = $github_org, o.api_key = $api_key, o.created_by = $created_by
-        """, {"name": body.org_name, "github_org": owner, "api_key": api_key, "created_by": user["login"]})
+            SET o.name = $name, o.github_org = $github_org, o.api_key = $api_key,
+                o.created_by = $created_by, o.transcript_sharing = $transcript_sharing
+        """, {"name": body.org_name, "github_org": owner, "api_key": api_key,
+              "created_by": user["login"], "transcript_sharing": body.transcript_sharing})
         if isinstance(neo4j_result, dict) and "error" in neo4j_result:
             if not USE_SUPABASE:
                 raise HTTPException(status_code=503, detail="Failed to persist org. Please retry.")
@@ -625,6 +629,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
         "slug": slug,
         "repos": body.repos,
         "repo_name": repo_name,
+        "transcript_sharing": body.transcript_sharing,
     })
 
     logger.info(f"Org setup complete: {slug} by {user['login']}")
@@ -1777,6 +1782,64 @@ async def internal_orgs(authorization: str = Header(...)):
             "neo4j_password": cfg.get("neo4j_password"),
         })
     return {"orgs": result}
+
+
+# =============================================================================
+# TRANSCRIPT COLLECTION (CASS pipeline)
+# =============================================================================
+
+
+MAX_TRANSCRIPT_SIZE = 50 * 1024 * 1024  # 50MB compressed
+
+
+@app.post("/api/transcript/upload")
+async def transcript_upload(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    author: str = Form(""),
+    branch: str = Form(""),
+    started_at: str = Form(""),
+    ended_at: str = Form(""),
+    message_count: int = Form(0),
+    size_bytes: int = Form(0),
+    org: dict = Depends(validate_api_key),
+):
+    """Upload a session transcript for the CASS distillation pipeline."""
+    if not org.get("transcript_sharing"):
+        raise HTTPException(status_code=403, detail="Transcript sharing not enabled for this org")
+
+    from .services.transcripts import check_duplicate, store_transcript, index_transcript
+
+    if await check_duplicate(org, session_id):
+        return {"status": "duplicate", "session_id": session_id}
+
+    file_data = await file.read()
+    if len(file_data) > MAX_TRANSCRIPT_SIZE:
+        raise HTTPException(status_code=413, detail="Transcript exceeds 50MB compressed limit")
+
+    metadata = {
+        "session_id": session_id,
+        "author": author,
+        "branch": branch,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "message_count": message_count,
+        "size_bytes": size_bytes,
+    }
+
+    try:
+        storage_path = await store_transcript(org, session_id, file_data, metadata)
+        metadata["storage_path"] = storage_path
+    except Exception as e:
+        logger.error(f"Transcript storage failed for {session_id}: {e}")
+        raise HTTPException(status_code=503, detail="Failed to store transcript")
+
+    try:
+        await index_transcript(org, metadata)
+    except Exception as e:
+        logger.warning(f"Transcript indexing failed for {session_id} (stored OK): {e}")
+
+    return {"status": "uploaded", "session_id": session_id, "storage_path": storage_path}
 
 
 # =============================================================================
