@@ -1694,22 +1694,27 @@ async def admin_waitlist_add(body: WaitlistAdd):
     except Exception:
         pass  # signup succeeds even if email fails
 
-    # Notify CL Renaissance on Telegram (non-blocking)
+    # Notify admins of new signup via email (non-blocking)
     try:
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        if bot_token and chat_id:
-            from .services.notify import _send_telegram
-            parts = ["New waitlist signup"]
+        resend_key = os.environ.get("RESEND_API_KEY", "")
+        if resend_key:
+            import resend
+            resend.api_key = resend_key
+            parts = []
             if body.name:
-                parts[0] += f": {body.name}"
+                parts.append(f"<b>Name:</b> {body.name}")
             if body.email:
-                parts.append(f"Email: {body.email}")
+                parts.append(f"<b>Email:</b> {body.email}")
             if body.github_username:
-                parts.append(f"GitHub: {body.github_username}")
+                parts.append(f"<b>GitHub:</b> {body.github_username}")
             if body.source:
-                parts.append(f"Source: {body.source}")
-            await _send_telegram(bot_token, chat_id, "\n".join(parts))
+                parts.append(f"<b>Source:</b> {body.source}")
+            resend.Emails.send({
+                "from": "Egregore <hello@egregore.xyz>",
+                "to": ["oguzhan@curvelabs.eu", "cem@curvelabs.eu"],
+                "subject": f"New waitlist signup: {body.name or body.email or 'anonymous'}",
+                "html": "<br>".join(parts) if parts else "New signup (no details)",
+            })
     except Exception:
         pass  # signup succeeds even if notification fails
 
