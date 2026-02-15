@@ -1680,11 +1680,15 @@ async def admin_waitlist_add(body: WaitlistAdd):
             resend.Emails.send({
                 "from": "Egregore <hello@egregore.xyz>",
                 "to": [body.email],
-                "subject": "You're on the list",
+                "subject": "You're in the summoning circle",
                 "html": (
                     f"<p>Hey {display_name},</p>"
-                    "<p>You're on the Egregore waitlist. We'll reach out when it's your turn.</p>"
-                    "<p>— Egregore</p>"
+                    "<p>Welcome to the circle. You're on the Egregore waitlist — "
+                    "we're building shared cognition for teams and agents, "
+                    "and we'll let you know as soon as it's your turn to join.</p>"
+                    "<p>In the meantime, if you're curious about what we're building, "
+                    'take a look at <a href="https://egregore.xyz">egregore.xyz</a>.</p>'
+                    "<p>Talk soon,<br>Oguzhan & Cem</p>"
                 ),
             })
     except Exception:
