@@ -386,6 +386,39 @@ async def load_orgs():
         await load_orgs_from_neo4j()
 
 
+ADMIN_USERS = {"oguzhan", "fcdagdelen"}
+
+
+async def validate_admin_github_token(authorization: str = Header(...)) -> str:
+    """Validate GitHub token and check username is in ADMIN_USERS.
+
+    Returns the GitHub username on success.
+    Also accepts valid API keys (falls through to validate_api_key logic).
+    """
+    token = authorization.replace("Bearer ", "").strip()
+
+    # Try API key first (backwards compat)
+    if token.startswith("ek_"):
+        await validate_api_key(authorization)
+        return "api_key_admin"
+
+    # Validate as GitHub token
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=10.0,
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    username = resp.json().get("login", "")
+    if username.lower() not in {u.lower() for u in ADMIN_USERS}:
+        raise HTTPException(status_code=403, detail="Access denied: not an admin user")
+
+    return username
+
+
 async def exchange_github_code(code: str) -> str:
     """Exchange OAuth authorization code for access token."""
     if not GITHUB_CLIENT_SECRET:

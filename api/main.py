@@ -19,7 +19,8 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Query, File, Form, 
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import (
-    validate_api_key, generate_api_key, reload_configs, ORG_CONFIGS,
+    validate_api_key, validate_admin_github_token, generate_api_key,
+    reload_configs, ORG_CONFIGS,
     load_orgs_from_neo4j, load_orgs, exchange_github_code, GITHUB_CLIENT_ID,
     USE_SUPABASE,
 )
@@ -1669,6 +1670,26 @@ async def admin_waitlist_add(body: WaitlistAdd):
         source=body.source,
     )
 
+    # Send confirmation email via Resend (non-blocking)
+    try:
+        resend_key = os.environ.get("RESEND_API_KEY", "")
+        if resend_key and body.email:
+            import resend
+            resend.api_key = resend_key
+            display_name = body.name or "there"
+            resend.Emails.send({
+                "from": "Egregore <hello@egregore.xyz>",
+                "to": [body.email],
+                "subject": "You're on the list",
+                "html": (
+                    f"<p>Hey {display_name},</p>"
+                    "<p>You're on the Egregore waitlist. We'll reach out when it's your turn.</p>"
+                    "<p>— Egregore</p>"
+                ),
+            })
+    except Exception:
+        pass  # signup succeeds even if email fails
+
     # Notify CL Renaissance on Telegram (non-blocking)
     try:
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -1694,9 +1715,9 @@ async def admin_waitlist_add(body: WaitlistAdd):
 @app.get("/api/admin/waitlist")
 async def admin_waitlist_list(
     status: str = "pending",
-    org: dict = Depends(validate_api_key),
+    admin_user: str = Depends(validate_admin_github_token),
 ):
-    """List waitlist entries. Auth: API key (admin only)."""
+    """List waitlist entries. Auth: GitHub token (admin users) or API key."""
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Waitlist requires Supabase")
 
@@ -1708,16 +1729,14 @@ async def admin_waitlist_list(
 @app.post("/api/admin/waitlist/approve")
 async def admin_waitlist_approve(
     body: WaitlistApprove,
-    org: dict = Depends(validate_api_key),
-    authorization: str = Header(...),
+    admin_user: str = Depends(validate_admin_github_token),
 ):
-    """Approve a waitlist entry. Auth: API key."""
+    """Approve a waitlist entry. Auth: GitHub token (admin users) or API key."""
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Waitlist requires Supabase")
 
-    # Get approver username from ORG_CONFIGS context
     from .services import supabase as sb
-    result = sb.waitlist_approve(body.waitlist_id, approved_by_username="admin")
+    result = sb.waitlist_approve(body.waitlist_id, approved_by_username=admin_user)
     if not result:
         raise HTTPException(status_code=404, detail="Waitlist entry not found")
     return {"status": "approved", "entry": result}

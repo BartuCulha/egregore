@@ -2,25 +2,27 @@ import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { getWaitlist, approveWaitlist } from '../api'
 
+const ADMIN_USERS = ['oguzhan', 'fcdagdelen']
+
 export default function WaitlistAdmin() {
   const [entries, setEntries] = useState([])
   const [filter, setFilter] = useState('pending')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  // Waitlist admin requires an API key (stored separately from GitHub token)
-  const apiKey = localStorage.getItem('api_key')
+  const githubToken = localStorage.getItem('github_token')
+  const githubUser = JSON.parse(localStorage.getItem('github_user') || '{}')
+  const isAdmin = ADMIN_USERS.includes(githubUser.login)
 
   const loadEntries = async () => {
-    if (!apiKey) {
-      setError('API key required. Set it in localStorage as "api_key".')
+    if (!githubToken || !isAdmin) {
       setLoading(false)
       return
     }
 
     setLoading(true)
     try {
-      const data = await getWaitlist(apiKey, filter)
+      const data = await getWaitlist(githubToken, filter)
       setEntries(data.entries || [])
       setError(null)
     } catch (err) {
@@ -32,16 +34,34 @@ export default function WaitlistAdmin() {
 
   useEffect(() => {
     loadEntries()
-  }, [filter, apiKey])
+  }, [filter, githubToken])
 
   const handleApprove = async (id) => {
-    if (!apiKey) return
+    if (!githubToken) return
     try {
-      await approveWaitlist(apiKey, id)
+      await approveWaitlist(githubToken, id)
       loadEntries()
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  if (!githubToken) {
+    return (
+      <div>
+        <Link to="/dashboard" style={styles.backLink}>Back to dashboard</Link>
+        <p style={styles.error}>Not logged in. Please sign in first.</p>
+      </div>
+    )
+  }
+
+  if (!isAdmin) {
+    return (
+      <div>
+        <Link to="/dashboard" style={styles.backLink}>Back to dashboard</Link>
+        <p style={styles.error}>Access denied</p>
+      </div>
+    )
   }
 
   return (
@@ -77,6 +97,7 @@ export default function WaitlistAdmin() {
           <div key={entry.id} style={styles.card}>
             <div style={styles.cardMain}>
               <div>
+                {entry.name && <div style={styles.name}>{entry.name}</div>}
                 {entry.email && <div>{entry.email}</div>}
                 {entry.github_username && (
                   <div style={styles.muted}>@{entry.github_username}</div>
@@ -156,6 +177,10 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '0.75rem',
+  },
+  name: {
+    fontWeight: 500,
+    marginBottom: '0.2rem',
   },
   date: {
     color: '#666',

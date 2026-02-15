@@ -126,16 +126,16 @@ export async function addToWaitlist(data) {
   })
 }
 
-export async function getWaitlist(apiKey, status = 'pending') {
+export async function getWaitlist(githubToken, status = 'pending') {
   return request(`/api/admin/waitlist?status=${status}`, {
-    headers: authHeaders(apiKey),
+    headers: authHeaders(githubToken),
   })
 }
 
-export async function approveWaitlist(apiKey, waitlistId) {
+export async function approveWaitlist(githubToken, waitlistId) {
   return request('/api/admin/waitlist/approve', {
     method: 'POST',
-    headers: authHeaders(apiKey),
+    headers: authHeaders(githubToken),
     body: JSON.stringify({ waitlist_id: waitlistId }),
   })
 }
