@@ -1,7 +1,7 @@
 [build]
-  base = "site 2"
+  base = "site"
   command = "npm run build"
-  publish = "site 2/dist"
+  publish = "site/dist"
 
 [build.environment]
   NODE_VERSION = "20"
