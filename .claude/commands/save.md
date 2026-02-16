@@ -134,6 +134,12 @@ Save your contributions to Egregore. Pushes working branch, creates PR to develo
 
 ## Neo4j Sync Logic (via bin/graph.sh)
 
+### Artifact property contract
+
+Every Artifact node MUST have: `id`, `title`, `type`, `topics`, `created`. SHOULD have: `filePath`. MAY have: `origin`, `analysis`, `runId`, `confidence`, dimensional properties.
+
+Commands that create artifacts: `/add`, `/reflect`, `/deep-reflect`, `/tutorial`, `/meeting`, `/save` sync. All must set the MUST properties. If a session creates ad-hoc artifacts (e.g., session synthesis), it must follow this contract.
+
 Run each check with `bash bin/graph.sh query "..."`. Never use MCP.
 
 ```cypher
@@ -205,6 +211,84 @@ SET q.topics = derivedTopics
 Run this as the final step of Neo4j sync, after all artifact and quest nodes are synced.
 
 This ensures files and graph stay in sync even if earlier commands skipped Neo4j.
+
+### Metadata enrichment for existing artifacts
+
+After all node creation and topic sync, enrich artifacts with missing metadata.
+
+**Topics backfill:**
+
+```cypher
+MATCH (a:Artifact)
+WHERE a.topics IS NULL OR size(a.topics) = 0
+RETURN a.id AS id, a.title AS title, a.type AS type, a.filePath AS filePath
+```
+
+For each artifact returned:
+1. **Has filePath** → read `memory/{filePath}`, parse frontmatter for `topics:`. If found, SET on node.
+2. **Has filePath but no frontmatter topics** → derive 2-4 topic slugs from title (lowercase, exclude stop words like "the/a/an/is/for/and/or/in/of/to", hyphenate compounds). Example: "Egregore Efficiency and Unit Economics" → `["egregore-efficiency", "unit-economics"]`.
+3. **No filePath (ghost artifact)** → derive topics from title only (same method as #2).
+4. Run: `MATCH (a:Artifact {id: $id}) SET a.topics = $topics`
+
+**Type backfill:**
+
+```cypher
+MATCH (a:Artifact) WHERE a.type IS NULL
+RETURN a.id AS id, a.title AS title, a.filePath AS filePath
+```
+
+Derive type from:
+- filePath directory: `decisions/` → `decision`, `findings/` → `finding`, `patterns/` → `pattern`
+- Title cues if no filePath: "confirmed"/"strategy"/"chose"/"decided" → `decision`, "risk"/"crisis"/"discovered"/"observed" → `finding`, "pattern"/"loop"/"recurring"/"tendency" → `pattern`
+- Default: `"finding"`
+- Run: `MATCH (a:Artifact {id: $id}) SET a.type = $type`
+
+Report: `[sync] ✓ Enriched {N} artifacts (topics: {n1}, type: {n2})`
+
+### Timestamp normalization
+
+Normalize null `created` timestamps so sort order is reliable:
+
+```cypher
+MATCH (a:Artifact) WHERE a.created IS NULL
+RETURN a.id AS id, a.filePath AS filePath
+```
+
+For each: extract date from:
+1. Artifact ID if it has `YYYY-MM-DD` prefix (e.g. `2026-02-07-some-title` → `2026-02-07`)
+2. Frontmatter `date:` field (if filePath exists, read the file)
+3. Git log: `git log --format=%aI --diff-filter=A -- "memory/{filePath}" | head -1` (file creation date)
+4. Fallback: use `2026-01-01` (sorts to end, identifiable as backfilled)
+
+Normalize to datetime:
+```cypher
+MATCH (a:Artifact {id: $id}) SET a.created = datetime($isoDateStr + 'T00:00:00Z')
+```
+
+Report: `[sync] ✓ Normalized {N} timestamps`
+
+### Ghost artifact resolution
+
+Resolve filePaths for graph-only artifacts that may have been materialized since creation:
+
+```cypher
+MATCH (a:Artifact) WHERE a.filePath IS NULL AND a.type IS NOT NULL
+RETURN a.id AS id, a.type AS type
+```
+
+For each: search filesystem by convention:
+```bash
+for dir in "knowledge/decisions" "knowledge/findings" "knowledge/patterns" "artifacts"; do
+  [ -f "memory/${dir}/${ID}.md" ] && FOUND="${dir}/${ID}.md" && break
+done
+```
+
+If found: `MATCH (a:Artifact {id: $id}) SET a.filePath = $found`
+If not found: leave null — `/deep-reflect` handles ghost artifacts gracefully via metadata-only evidence entries (see deep-reflect.md Step 3B section 4).
+
+Report: `[sync] ✓ Resolved {N} ghost artifact paths`
+
+**Note:** ~39 of the 53 ghost artifacts genuinely have no file. They're session-extracted insights written to the graph but never materialized as markdown. This is expected — the enrichment steps above ensure they at least have topics, type, and created set.
 
 ## Example
 
