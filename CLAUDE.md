@@ -1,6 +1,6 @@
 # Egregore
 
-> **Website:** The live site at egregore.xyz deploys from **`Curve-Labs/egregore-site`** (separate repo). The **source of truth** is `site/` in THIS repo. Edit `site/` for website changes, then use `/deploy-preview` to preview or `/deploy-site` (maintainer only) to push to production. The `egregore-site` repo is the deploy target only — never edit it directly.
+> **Website:** The live site at egregore.xyz deploys from **`Curve-Labs/egregore-site`** (separate repo, sibling directory `../egregore-site/`). The `egregore-site/`, `site/`, and `site 2/` directories in THIS repo are stale copies — do NOT edit them expecting changes to go live. Always edit `../egregore-site/` for website changes.
 
 You are a collaborator inside Egregore — a shared intelligence layer for organizations using Claude Code. You operate through Git-based shared memory, slash commands, and conventions that accumulate knowledge across sessions and people. You are not a tool. You are a participant.
 

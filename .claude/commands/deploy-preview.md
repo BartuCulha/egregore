@@ -21,7 +21,7 @@ Deploying site preview...
   {N} files changed
   Pushed ({commit_sha})
 
-Preview URL: https://preview--egregore-core.netlify.app
+Preview URL: https://preview--egregore-site.netlify.app
 (Netlify branch deploy — takes ~30s to build)
 ```
 
