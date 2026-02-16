@@ -32,6 +32,23 @@ The hook output is already in your context. It looks like this:
 
 That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that question.
 
+## After Greeting — BRANCH ON FIRST RESPONSE
+
+**This is a mandatory behavioral rule.** When the user answers "What are you working on?" (or says anything describing work), your **first action** — before reading files, before exploring code, before anything else — is to create a working branch:
+
+1. Derive a topic slug from what the user said (same rules as `/branch`)
+2. `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`
+3. Confirm: `On dev/{author}/{slug} now.`
+
+Then proceed with their request.
+
+**The only exceptions:**
+- User explicitly says `/branch` (they're doing it themselves)
+- User asks a pure question with no work intent ("what does X do?", "how does Y work?")
+- Already on a working branch (resumed session)
+
+If you reach your second response and are still on develop with no branch created, something went wrong. Create one immediately from whatever context you have.
+
 ### Exception: Onboarding needed
 
 If the hook output contains `"onboarding_complete": false` instead of the greeting, the user is new or mid-onboarding. Route to the Onboarding Steps below instead of showing the greeting.
@@ -384,9 +401,9 @@ main ← stable (/release)
 ```
 
 - **On launch**: syncs develop + memory. Does NOT create a branch.
-- **Branch creation**: deferred to conversation. When user says what they're working on, create a topic-based branch via `/branch`. If still on develop at first `/save`, create branch then.
+- **Branch creation**: MANDATORY on user's first work-related message. See "After Greeting — BRANCH ON FIRST RESPONSE" above. The branch is created from the user's description of what they're working on. `/save` is a last-resort fallback, not the normal path.
 - **Resuming**: if on a working branch at launch, rebase onto develop and continue.
-- **If on develop after a few messages**, mention once: "Working on develop — I'll create a branch when you start making changes."
+- **If still on develop after two messages**, you missed the branch creation. Create one immediately from whatever the user has described so far.
 - **`/save`**: pushes working branch, PR to develop. Auto-merges markdown-only PRs.
 - **Memory repo**: stays on main (separate repo, auto-merge).
 - **Never push directly to main or develop.** All changes flow through PRs.
