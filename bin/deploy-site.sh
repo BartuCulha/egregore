@@ -23,18 +23,19 @@ if [ -z "${GITHUB_TOKEN:-}" ]; then
 fi
 
 # Config
-SOURCE_REPO="Curve-Labs/egregore"
 TARGET_REPO="Curve-Labs/egregore-site"
-SOURCE_DIR="site 2"
-SOURCE_BRANCH="main"
+SOURCE_DIR="$SCRIPT_DIR/site"
 DRY_RUN=false
+PREVIEW=false
+TARGET_BRANCH="main"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source-branch)
-      SOURCE_BRANCH="$2"
-      shift 2
+    --preview)
+      PREVIEW=true
+      TARGET_BRANCH="preview"
+      shift
       ;;
     --dry-run|dry)
       DRY_RUN=true
@@ -42,75 +43,67 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: deploy-site.sh [--source-branch <branch>] [--dry-run|dry]" >&2
+      echo "Usage: deploy-site.sh [--preview] [--dry-run|dry]" >&2
       exit 1
       ;;
   esac
 done
 
+# Verify local site/ directory exists
+if [ ! -d "$SOURCE_DIR" ]; then
+  echo "Error: site/ directory not found at $SOURCE_DIR" >&2
+  exit 1
+fi
+
 WORK_DIR="/tmp/egregore-deploy"
-SOURCE_PATH="$WORK_DIR/source"
 TARGET_PATH="$WORK_DIR/target"
 
 cleanup() {
   rm -rf "$WORK_DIR"
 }
 
-# Clone or pull source repo
-echo "Fetching source: $SOURCE_REPO ($SOURCE_BRANCH)..." >&2
 mkdir -p "$WORK_DIR"
-
-if [ -d "$SOURCE_PATH/.git" ]; then
-  git -C "$SOURCE_PATH" fetch origin "$SOURCE_BRANCH" --quiet
-  git -C "$SOURCE_PATH" checkout "$SOURCE_BRANCH" --quiet
-  git -C "$SOURCE_PATH" pull origin "$SOURCE_BRANCH" --quiet
-else
-  rm -rf "$SOURCE_PATH"
-  git clone --quiet --branch "$SOURCE_BRANCH" --depth 1 \
-    "https://$GITHUB_TOKEN@github.com/$SOURCE_REPO.git" "$SOURCE_PATH"
-fi
-
-# Verify source dir exists
-if [ ! -d "$SOURCE_PATH/$SOURCE_DIR" ]; then
-  echo "Error: '$SOURCE_DIR/' not found in $SOURCE_REPO" >&2
-  cleanup
-  exit 1
-fi
 
 # Clone or pull target repo
 echo "Fetching target: $TARGET_REPO..." >&2
 
 if [ -d "$TARGET_PATH/.git" ]; then
-  git -C "$TARGET_PATH" fetch origin main --quiet
-  git -C "$TARGET_PATH" checkout main --quiet
-  git -C "$TARGET_PATH" pull origin main --quiet
+  git -C "$TARGET_PATH" fetch origin --quiet
+  # Checkout target branch, create if it doesn't exist
+  if git -C "$TARGET_PATH" rev-parse --verify "origin/$TARGET_BRANCH" >/dev/null 2>&1; then
+    git -C "$TARGET_PATH" checkout "$TARGET_BRANCH" --quiet 2>/dev/null || git -C "$TARGET_PATH" checkout -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH" --quiet
+    git -C "$TARGET_PATH" pull origin "$TARGET_BRANCH" --quiet
+  else
+    # Branch doesn't exist remotely — create from main
+    git -C "$TARGET_PATH" checkout main --quiet
+    git -C "$TARGET_PATH" pull origin main --quiet
+    git -C "$TARGET_PATH" checkout -b "$TARGET_BRANCH" --quiet 2>/dev/null || git -C "$TARGET_PATH" checkout "$TARGET_BRANCH" --quiet
+  fi
 else
   rm -rf "$TARGET_PATH"
-  git clone --quiet --depth 1 \
+  git clone --quiet \
     "https://$GITHUB_TOKEN@github.com/$TARGET_REPO.git" "$TARGET_PATH"
+  # Checkout target branch
+  if [ "$TARGET_BRANCH" != "main" ]; then
+    if git -C "$TARGET_PATH" rev-parse --verify "origin/$TARGET_BRANCH" >/dev/null 2>&1; then
+      git -C "$TARGET_PATH" checkout -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH" --quiet
+    else
+      git -C "$TARGET_PATH" checkout -b "$TARGET_BRANCH" --quiet
+    fi
+  fi
 fi
 
-# Sync site contents (preserve setup flow + auth files that live only in egregore-site)
-echo "Syncing files..." >&2
+# Sync site contents from local source
+echo "Syncing files from local site/..." >&2
 rsync -a --delete \
   --exclude='.git' \
   --exclude='.git/' \
-  --exclude='src/components/SetupFlow.jsx' \
-  --exclude='src/api.js' \
-  --exclude='src/auth.js' \
-  --exclude='src/auth.test.js' \
-  --exclude='src/test/' \
-  "$SOURCE_PATH/$SOURCE_DIR/" "$TARGET_PATH/"
-
-# Ensure setup flow routes exist in main.jsx
-if ! grep -q 'SetupFlow' "$TARGET_PATH/src/main.jsx" 2>/dev/null; then
-  echo "Injecting setup flow routes into main.jsx..." >&2
-  # Add import
-  sed -i.bak "s|^import DocsPage|import SetupFlow from './components/SetupFlow.jsx'\nimport DocsPage|" "$TARGET_PATH/src/main.jsx"
-  # Add routes before closing </Routes>
-  sed -i.bak "s|</Routes>|<Route path=\"/setup\" element={<SetupFlow />} />\n        <Route path=\"/callback\" element={<SetupFlow />} />\n        <Route path=\"/join\" element={<SetupFlow />} />\n      </Routes>|" "$TARGET_PATH/src/main.jsx"
-  rm -f "$TARGET_PATH/src/main.jsx.bak"
-fi
+  --exclude='node_modules' \
+  --exclude='node_modules/' \
+  --exclude='dist' \
+  --exclude='dist/' \
+  --exclude='package-lock.json' \
+  "$SOURCE_DIR/" "$TARGET_PATH/"
 
 # Check for changes
 cd "$TARGET_PATH"
@@ -144,12 +137,22 @@ fi
 
 # Commit and push
 DEPLOY_DATE=$(date +%Y-%m-%d)
+DEPLOY_MSG="Deploy site: $DEPLOY_DATE"
+if [ "$PREVIEW" = true ]; then
+  DEPLOY_MSG="Preview deploy: $DEPLOY_DATE"
+fi
+
 git add -A
-git commit -m "Deploy site: $DEPLOY_DATE" --quiet
-git push origin main --quiet
+git commit -m "$DEPLOY_MSG" --quiet
+git push origin "$TARGET_BRANCH" --quiet
 
 COMMIT_SHA=$(git rev-parse --short HEAD)
-echo "RESULT:deployed:$COMMIT_SHA"
+
+if [ "$PREVIEW" = true ]; then
+  echo "RESULT:preview:$COMMIT_SHA"
+else
+  echo "RESULT:deployed:$COMMIT_SHA"
+fi
 
 cleanup
 exit 0
