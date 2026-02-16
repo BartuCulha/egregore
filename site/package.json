@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/generate-og.mjs && node scripts/generate-static.mjs && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -22,7 +22,9 @@
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
+    "@resvg/resvg-js": "^2.6.2",
     "globals": "^16.5.0",
+    "satori": "^0.19.2",
     "vite": "^7.3.1"
   }
 }

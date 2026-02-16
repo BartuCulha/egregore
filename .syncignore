@@ -24,6 +24,7 @@ __pycache__
 .claude/commands/sync-public.md
 .claude/commands/docs.md
 .claude/commands/deploy-site.md
+.claude/commands/deploy-preview.md
 .claude/commands/waitlist.md
 
 # CL-only docs (not for public repo)
@@ -35,7 +36,6 @@ egregore-graph.html
 
 # CL-internal infrastructure
 site
-site 2
 egregore-site
 netlify.toml
 scripts
