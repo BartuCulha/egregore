@@ -146,6 +146,86 @@ if command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
   ) 2>/dev/null || true
 fi
 
+# --- Compute session boundary for environment isolation ---
+compute_boundary() {
+  local hash
+  hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  local boundary_file="/tmp/egregore-boundary-${hash}.json"
+  local project_dir="$SCRIPT_DIR"
+
+  # Resolve memory directory (follow symlink)
+  local memory_dir=""
+  if [ -L "$SCRIPT_DIR/memory" ]; then
+    memory_dir=$(realpath "$SCRIPT_DIR/memory" 2>/dev/null || echo "")
+  fi
+
+  # Validate and resolve managed repos
+  local managed_repos_json="[]"
+  local parent_dir
+  parent_dir="$(dirname "$SCRIPT_DIR")"
+  local repos
+  repos=$(jq -r '.repos[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  if [ -n "$repos" ]; then
+    # Validate repos first
+    bash "$SCRIPT_DIR/bin/boundary.sh" validate-repos 2>/dev/null || true
+    managed_repos_json="["
+    local first=true
+    for repo in $repos; do
+      # Skip entries with path traversal or absolute paths
+      [[ "$repo" == *".."* ]] && continue
+      [[ "$repo" == /* ]] && continue
+      local resolved
+      resolved=$(realpath "$parent_dir/$repo" 2>/dev/null || echo "")
+      [ -z "$resolved" ] && continue
+      # Must resolve under parent directory
+      [[ "$resolved" != "$parent_dir"/* ]] && continue
+      $first || managed_repos_json="$managed_repos_json,"
+      managed_repos_json="$managed_repos_json\"$resolved\""
+      first=false
+    done
+    managed_repos_json="$managed_repos_json]"
+  fi
+
+  # Collect denied paths from instance registry
+  local denied_paths_json="[]"
+  local registry="$HOME/.egregore/instances.json"
+  if [ -f "$registry" ]; then
+    denied_paths_json=$(jq --arg self "$project_dir" \
+      '[.[] | select(.path != $self) | .path]' "$registry" 2>/dev/null || echo "[]")
+  fi
+
+  # Write boundary file (atomic: write to tmp, then mv)
+  jq -n \
+    --arg project_dir "$project_dir" \
+    --arg memory_dir "$memory_dir" \
+    --argjson managed_repos "$managed_repos_json" \
+    --argjson denied_paths "$denied_paths_json" \
+    '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
+    > "$boundary_file.tmp" && mv "$boundary_file.tmp" "$boundary_file"
+
+  # Generate dynamic deny rules in .claude/settings.local.json
+  local settings_local="$SCRIPT_DIR/.claude/settings.local.json"
+  local deny_rules="[]"
+  if [ "$denied_paths_json" != "[]" ]; then
+    deny_rules=$(echo "$denied_paths_json" | jq '[.[] | "Read(" + . + "/**)", "Edit(" + . + "/**)", "Write(" + . + "/**)"]')
+  fi
+  # Deny writing to instance registry (reads allowed for multi-instance features)
+  deny_rules=$(echo "$deny_rules" | jq '. + ["Edit(~/.egregore/instances.json)", "Write(~/.egregore/instances.json)"]')
+
+  # Merge with existing settings.local.json — only touch permissions.deny
+  mkdir -p "$SCRIPT_DIR/.claude"
+  if [ -f "$settings_local" ]; then
+    jq --argjson deny "$deny_rules" '.permissions.deny = $deny' "$settings_local" \
+      > "$settings_local.tmp" && mv "$settings_local.tmp" "$settings_local"
+  else
+    jq -n --argjson deny "$deny_rules" \
+      '{permissions: {deny: $deny}}' > "$settings_local"
+  fi
+}
+
+# Run boundary computation (non-blocking, but fast — just file I/O)
+compute_boundary 2>/dev/null || true
+
 # --- Fetch all remotes in parallel ---
 git fetch origin --quiet 2>/dev/null &
 
@@ -247,7 +327,7 @@ for REPO in $MANAGED_REPOS; do
     if [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null | head -1)" ]; then
       R_DIRTY=" *"
     fi
-    REPOS_STATUS="${REPOS_STATUS}    ${REPO}: ${R_BRANCH}${R_DIRTY}\n"
+    REPOS_STATUS="${REPOS_STATUS}  ◇ ${REPO}: ${R_BRANCH}${R_DIRTY}\n"
   fi
 done
 
@@ -425,6 +505,25 @@ fi
   echo "$SUMMARY" > "$CTX_DIR/soul_summary"
 ) &
 
+# 6. Handoffs addressed to user (background)
+(
+  JSON="[]"
+  if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
+    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | head -5 || true)
+    JSON="["
+    FIRST=true
+    for AF in $ADDRESSED; do
+      [ -z "$AF" ] && continue
+      AF_NAME=$(basename "$AF" .md)
+      $FIRST || JSON="$JSON,"
+      JSON="$JSON\"$AF_NAME\""
+      FIRST=false
+    done
+    JSON="$JSON]"
+  fi
+  echo "$JSON" > "$CTX_DIR/addressed"
+) &
+
 # Wait for all context gathering to finish
 wait
 
@@ -440,7 +539,27 @@ cat << 'GREETING'
 
 GREETING
 
-# --- Status ---
+# --- Ornamented status ---
+# Humanize repo_name: egregore-0 → Egregore 0
+REPO_NAME=$(jq -r '.repo_name // "egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+INSTANCE_NAME=$(echo "$REPO_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+ORG_NAME=$(jq -r '.org_name // ""' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+
+# Build the status line with right-aligned org name
+SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
+echo "$SEPARATOR"
+
+# Instance + org line (right-aligned org)
+LEFT="  ◈ $INSTANCE_NAME"
+RIGHT="$ORG_NAME"
+LINE_WIDTH=67
+LEFT_LEN=${#LEFT}
+RIGHT_LEN=${#RIGHT}
+PADDING=$((LINE_WIDTH - LEFT_LEN - RIGHT_LEN))
+if [ "$PADDING" -lt 1 ]; then PADDING=1; fi
+printf "%s%*s%s\n" "$LEFT" "$PADDING" "" "$RIGHT"
+
+# User + branch + memory line
 DISPLAY_NAME=""
 if [ -f "$STATE_FILE" ]; then
   DISPLAY_NAME=$(jq -r '.display_name // .name // empty' "$STATE_FILE" 2>/dev/null)
@@ -451,19 +570,28 @@ BRANCH_STATUS="$BRANCH"
 if [ "$ACTION" = "resumed" ]; then
   BRANCH_STATUS="$BRANCH (resumed)"
 fi
+BRANCH_STATUS="$BRANCH_STATUS · synced"
+if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
+  BRANCH_STATUS="$BRANCH_STATUS · $COMMITS_AHEAD ahead"
+fi
 
-echo "  User: $GREETING_NAME"
-echo "  Branch: $BRANCH_STATUS"
-echo "  Develop: synced"
-if [ "$MEMORY_SYNCED" = "true" ]; then echo "  Memory: synced"; fi
-if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then echo "  $COMMITS_AHEAD changes on develop since last release."; fi
+MEMORY_STATUS=""
+if [ "$MEMORY_SYNCED" = "true" ]; then
+  MEMORY_STATUS="◆ memory · synced"
+fi
+
+echo "  ◇ $GREETING_NAME        ⎇ $BRANCH_STATUS        $MEMORY_STATUS"
+
+# Managed repos status
 if [ -n "$REPOS_STATUS" ]; then
-  echo "  Repos:"
   printf "$REPOS_STATUS"
 fi
 
+echo ""
+
 # --- Session context (hidden, for Claude) ---
 CONTEXT_HANDOFFS=$(cat "$CTX_DIR/handoffs" 2>/dev/null || echo "[]")
+CONTEXT_ADDRESSED=$(cat "$CTX_DIR/addressed" 2>/dev/null || echo "[]")
 CONTEXT_QUESTS=$(cat "$CTX_DIR/quests" 2>/dev/null || echo "[]")
 CONTEXT_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
 CONTEXT_TEAM=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
@@ -475,6 +603,7 @@ cat << CTXEOF
 {
   "time_of_day": "$TIME_OF_DAY",
   "recent_handoffs": $CONTEXT_HANDOFFS,
+  "addressed_to_user": $CONTEXT_ADDRESSED,
   "quests": $CONTEXT_QUESTS,
   "last_user_activity": "$CONTEXT_ACTIVITY",
   "team_recent_memory": $CONTEXT_TEAM,
@@ -513,7 +642,7 @@ if [ "$FIRST_SESSION" = "true" ]; then
   echo ""
   echo "  Welcome! This is your first session."
   echo ""
-  echo "IMPORTANT: Display the above greeting exactly as-is. Then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
+  echo "IMPORTANT: Display the above greeting exactly as-is (ASCII art + ornamented status). Then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
   # Clear the flag so it only shows once
   jq '.first_session = false' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 else
@@ -528,7 +657,7 @@ else
   fi
 
   echo ""
-  echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting) on their first message. Then ask: What are you working on?"
+  echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
   echo ""
   echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
 fi
