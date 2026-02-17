@@ -2541,6 +2541,137 @@ async def admin_graph_query(
         raise HTTPException(status_code=503, detail=f"Query failed: {e}")
 
 
+@app.post("/api/admin/org/{old_slug}/rename")
+async def admin_rename_org(
+    old_slug: str,
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Rename an org slug across all systems.
+
+    Body: {"new_slug": "egregore-0"}
+
+    Updates: Supabase (orgs, api_keys, memberships, telemetry_events, telegram_events),
+    Neo4j (Org node id, all org-scoped nodes), API key (regenerated with new prefix),
+    and in-memory ORG_CONFIGS.
+    """
+    new_slug = body.get("new_slug", "").strip()
+    if not new_slug:
+        raise HTTPException(status_code=400, detail="Missing 'new_slug' field")
+    if new_slug == old_slug:
+        raise HTTPException(status_code=400, detail="New slug is same as old slug")
+
+    from .services import supabase as sb
+
+    # Verify old org exists
+    old_org = sb.get_org_by_slug(old_slug)
+    if not old_org:
+        raise HTTPException(status_code=404, detail=f"Org not found: {old_slug}")
+
+    # Check new slug doesn't already exist (unless it's an empty ghost we'll merge into)
+    existing_new = sb.get_org_by_slug(new_slug)
+
+    steps = []
+
+    # Step 1: Update Supabase orgs table
+    try:
+        if existing_new:
+            # Ghost org exists at new_slug — delete it first, then rename old → new
+            get_client = sb.get_client
+            # Delete ghost memberships
+            get_client().table("memberships").delete().eq("org_slug", new_slug).execute()
+            # Delete ghost api_keys
+            get_client().table("api_keys").delete().eq("org_slug", new_slug).execute()
+            # Delete ghost telemetry
+            get_client().table("telemetry_events").delete().eq("org_slug", new_slug).execute()
+            # Delete ghost org row
+            get_client().table("orgs").delete().eq("slug", new_slug).execute()
+            steps.append(f"Deleted ghost org '{new_slug}' from Supabase")
+
+        # Rename org row
+        sb.get_client().table("orgs").update({"slug": new_slug}).eq("slug", old_slug).execute()
+        steps.append(f"Renamed orgs.slug: {old_slug} → {new_slug}")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Supabase orgs rename failed: {e}")
+
+    # Step 2: Update all FK references in Supabase
+    get_client = sb.get_client
+    for table in ("api_keys", "memberships", "telemetry_events", "telegram_events"):
+        try:
+            get_client().table(table).update({"org_slug": new_slug}).eq("org_slug", old_slug).execute()
+            steps.append(f"Updated {table}.org_slug → {new_slug}")
+        except Exception as e:
+            steps.append(f"Warning: {table} update failed: {e}")
+
+    # Step 3: Regenerate API key with new slug prefix
+    try:
+        sb.revoke_api_key(old_slug)  # revoke by old slug (already renamed, try both)
+        sb.revoke_api_key(new_slug)
+    except Exception:
+        pass
+    new_key = generate_api_key(new_slug)
+    try:
+        sb.create_api_key(new_slug, new_key)
+        steps.append(f"Generated new API key: {new_key[:20]}...")
+    except Exception as e:
+        steps.append(f"Warning: API key creation failed: {e}")
+
+    # Step 4: Update Neo4j
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            # Rename Org node
+            await execute_system_query(seed_org, """
+                MATCH (o:Org {id: $old_slug})
+                SET o.id = $new_slug, o.org = $new_slug, o.api_key = $new_key
+                RETURN o.id
+            """, {"old_slug": old_slug, "new_slug": new_slug, "new_key": new_key})
+            steps.append(f"Renamed Neo4j Org node: {old_slug} → {new_slug}")
+        except Exception as e:
+            steps.append(f"Warning: Neo4j Org rename failed: {e}")
+
+        try:
+            # Delete ghost Org node if it existed
+            await execute_system_query(seed_org, """
+                MATCH (o:Org {id: $new_slug})
+                WITH o, count {{(o2:Org {{id: $new_slug}})}} AS cnt
+                WHERE cnt > 1
+                DELETE o
+            """, {"new_slug": new_slug})
+        except Exception:
+            pass  # Best-effort ghost cleanup
+
+        # Update org scope on ALL node types
+        for label in ("Person", "Session", "Artifact", "Quest", "Project", "Spirit", "CheckIn", "Todo", "QuestionSet"):
+            try:
+                result = await execute_system_query(seed_org, f"""
+                    MATCH (n:{label}) WHERE n.org = $old_slug
+                    SET n.org = $new_slug
+                    RETURN count(n) AS updated
+                """, {"old_slug": old_slug, "new_slug": new_slug})
+                vals = result.get("values", [])
+                count = vals[0][0] if vals and vals[0] else 0
+                if count > 0:
+                    steps.append(f"Updated {count} {label} nodes: org → {new_slug}")
+            except Exception as e:
+                steps.append(f"Warning: {label} scope update failed: {e}")
+
+    # Step 5: Update in-memory ORG_CONFIGS
+    old_config = ORG_CONFIGS.pop(old_slug, {})
+    old_config["api_key"] = new_key
+    old_config["slug"] = new_slug
+    ORG_CONFIGS[new_slug] = old_config
+    steps.append(f"Updated in-memory config: {old_slug} → {new_slug}")
+
+    return {
+        "status": "ok",
+        "old_slug": old_slug,
+        "new_slug": new_slug,
+        "new_key_prefix": new_key[:20] + "...",
+        "steps": steps,
+    }
+
+
 @app.get("/api/admin/telemetry")
 async def admin_telemetry(
     org_slug: str = Query(None),
