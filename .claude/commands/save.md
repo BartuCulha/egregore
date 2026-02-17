@@ -92,6 +92,13 @@ Not this: user is leaving/done → `/handoff` (which auto-saves)
          ```
          Tell the developer: `⚠ Preflight found issues — fix before merging. See violations above.`
        - Preflight never blocks the save — work is always preserved. It warns.
+     - **Cypher query check** — after preflight, detect if changed files contain Cypher blocks:
+       ```bash
+       git diff develop --name-only | xargs grep -l '```cypher' 2>/dev/null | head -1
+       ```
+       If any files contain Cypher blocks, show a non-blocking recommendation:
+       > Changed files contain Cypher queries. Consider running `/test` first.
+       This is advisory only — never blocks the save.
 
 4. **For managed repos** (listed in `egregore.json` → `repos[]`, located at `../{repo}/`):
    - Read the repos list: `jq -r '.repos[]? // empty' egregore.json`

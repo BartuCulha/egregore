@@ -149,7 +149,7 @@ Execute each with `bash bin/graph.sh query "..." '{"param": "value"}'`. Run all 
 **Q1 — Recent sessions (7 days):**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE date(s.date) >= date() - duration('P7D')
+WHERE date(left(toString(s.date), 10)) >= date() - duration('P7D')
 RETURN s.topic AS topic, s.date AS date, s.summary AS summary
 ORDER BY s.date DESC LIMIT 5
 ```
@@ -176,10 +176,11 @@ ORDER BY a.created DESC LIMIT 10
 **Q4 — Knowledge gaps (sessions without artifacts):**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE date(s.date) >= date() - duration('P14D')
+WITH s, p, date(left(toString(s.date), 10)) AS sDate
+WHERE sDate >= date() - duration('P14D')
 OPTIONAL MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p)
-WHERE a.created >= datetime({year: s.date.year, month: s.date.month, day: s.date.day})
-  AND a.created < datetime({year: s.date.year, month: s.date.month, day: s.date.day}) + duration('P1D')
+WHERE a.created >= datetime({year: sDate.year, month: sDate.month, day: sDate.day})
+  AND a.created < datetime({year: sDate.year, month: sDate.month, day: sDate.day}) + duration('P1D')
 WITH s, count(a) AS artifactCount
 WHERE artifactCount = 0
 RETURN s.topic AS topic, s.date AS date

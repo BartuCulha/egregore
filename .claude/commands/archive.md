@@ -51,7 +51,7 @@ Execute each with `bash bin/graph.sh query "..." '{"param": "value"}'`.
 **Q1 — Recent sessions (7 days):**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE date(s.date) >= date() - duration('P7D')
+WHERE date(left(toString(s.date), 10)) >= date() - duration('P7D')
 RETURN s.topic AS topic, s.date AS date, s.summary AS summary
 ORDER BY s.date DESC LIMIT 5
 ```
