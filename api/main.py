@@ -2510,6 +2510,37 @@ async def admin_backfill_keys(admin_user: str = Depends(validate_admin_github_to
     }
 
 
+@app.post("/api/admin/graph-query")
+async def admin_graph_query(
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Run a read-only Cypher query against the shared customer Neo4j database.
+
+    Body: {"statement": "MATCH (n) RETURN n LIMIT 5", "params": {}}
+    Only for admin inspection — no writes allowed.
+    """
+    statement = body.get("statement", "")
+    if not statement:
+        raise HTTPException(status_code=400, detail="Missing 'statement' field")
+
+    # Block write operations
+    upper = statement.upper().strip()
+    for keyword in ("CREATE", "MERGE", "DELETE", "DETACH", "SET ", "REMOVE "):
+        if keyword in upper:
+            raise HTTPException(status_code=400, detail=f"Write operations not allowed: {keyword.strip()}")
+
+    seed_org = _get_seed_org()
+    if not seed_org:
+        raise HTTPException(status_code=503, detail="No Neo4j access available")
+
+    try:
+        result = await execute_system_query(seed_org, statement, body.get("params", {}))
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Query failed: {e}")
+
+
 @app.get("/api/admin/telemetry")
 async def admin_telemetry(
     org_slug: str = Query(None),
