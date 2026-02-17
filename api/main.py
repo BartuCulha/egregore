@@ -326,6 +326,7 @@ async def org_register(body: OrgRegister, authorization: str = Header(...)):
     default_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
     new_org = {
+        "slug": slug,
         "api_key": api_key,
         "org_name": body.org_name,
         "github_org": body.github_org,
@@ -2810,6 +2811,66 @@ async def admin_telemetry(
             "by_org": by_org,
         },
     }
+
+
+# =============================================================================
+# ADMIN: DELETE ORG
+# =============================================================================
+
+
+@app.delete("/api/admin/org/{slug}")
+async def admin_delete_org(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Cascading delete of an org and all its data.
+
+    Deletes: memberships, api_keys, telemetry_events, telegram_events, orgs row (Supabase),
+    Org node (Neo4j), in-memory ORG_CONFIGS entry.
+
+    Admin-only. Used for test cleanup and decommissioning orgs.
+    """
+    from .services import supabase as sb
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Delete requires Supabase")
+
+    org_row = sb.get_org_by_slug(slug)
+    if not org_row:
+        raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
+
+    steps = []
+    get_client = sb.get_client
+
+    # Delete FK-dependent tables first, then the org row
+    for table, col in [
+        ("memberships", "org_slug"),
+        ("api_keys", "org_slug"),
+        ("telemetry_events", "org_slug"),
+        ("telegram_events", "org_slug"),
+        ("orgs", "slug"),
+    ]:
+        try:
+            get_client().table(table).delete().eq(col, slug).execute()
+            steps.append(f"Deleted {table}")
+        except Exception as e:
+            steps.append(f"Warning: {table} delete failed: {e}")
+
+    # Delete Neo4j Org node
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            await execute_system_query(seed_org, """
+                MATCH (o:Org {id: $slug}) DELETE o
+            """, {"slug": slug})
+            steps.append("Deleted Neo4j Org node")
+        except Exception as e:
+            steps.append(f"Warning: Neo4j Org node delete failed: {e}")
+
+    # Remove from in-memory config
+    ORG_CONFIGS.pop(slug, None)
+    steps.append("Removed from ORG_CONFIGS")
+
+    logger.info(f"Admin {admin_user} deleted org: {slug}")
+
+    return {"status": "ok", "slug": slug, "steps": steps}
 
 
 # =============================================================================
