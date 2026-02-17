@@ -25,6 +25,19 @@ echo ""
 # Save current state
 ORIGINAL_BRANCH=$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || echo "develop")
 
+# Snapshot bin/ from the branch we're testing. Branch switches change files on disk,
+# so we preserve and restore them before each run.
+SNAPSHOT_DIR=$(mktemp -d)
+cp -R "$SCRIPT_DIR/bin/" "$SNAPSHOT_DIR/bin/"
+cleanup() {
+  rm -rf "$SNAPSHOT_DIR"
+  git -C "$SCRIPT_DIR" checkout "$ORIGINAL_BRANCH" --quiet 2>/dev/null || true
+  for j in $(seq 1 "$COUNT"); do
+    git -C "$SCRIPT_DIR" branch -D "dev/test/startup-test-$j" --quiet 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+
 for i in $(seq 1 "$COUNT"); do
   printf "Run %d/%d... " "$i" "$COUNT"
 
@@ -45,6 +58,9 @@ for i in $(seq 1 "$COUNT"); do
   esac
 
   START_BRANCH=$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null)
+
+  # Restore the version under test (branch switches may have swapped files on disk)
+  cp -R "$SNAPSHOT_DIR/bin/" "$SCRIPT_DIR/bin/"
 
   # Run session-start and capture output
   OUTPUT=$(bash "$SCRIPT_DIR/bin/session-start.sh" 2>&1) || true
@@ -109,13 +125,11 @@ for i in $(seq 1 "$COUNT"); do
     done
   fi
 
-  # Clean up test branches
+  # Return to develop between runs
   git -C "$SCRIPT_DIR" checkout develop --quiet 2>/dev/null || true
-  git -C "$SCRIPT_DIR" branch -D "dev/test/startup-test-$i" --quiet 2>/dev/null || true
 done
 
-# Restore original branch
-git -C "$SCRIPT_DIR" checkout "$ORIGINAL_BRANCH" --quiet 2>/dev/null || true
+# Cleanup handled by trap
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
