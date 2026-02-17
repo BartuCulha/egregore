@@ -73,6 +73,16 @@ _resolve_org() {
 _resolve_session_id() {
   if [ -n "${EGREGORE_SESSION_ID:-}" ]; then
     echo "$EGREGORE_SESSION_ID"
+    return
+  fi
+
+  # Fallback: read from file written by session-start.sh
+  # (env vars from hooks don't propagate into the Claude Code agent)
+  local proj_hash
+  proj_hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  local sid_file="$HOME/.egregore/session-${proj_hash}.id"
+  if [ -f "$sid_file" ]; then
+    cat "$sid_file" 2>/dev/null || echo "unknown"
   else
     echo "unknown"
   fi
