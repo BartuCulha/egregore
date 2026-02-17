@@ -106,15 +106,32 @@ def update_org(slug: str, **fields) -> Optional[dict]:
 
 
 def create_api_key(org_slug: str, api_key: str) -> dict:
-    """Store a new API key (hashed). Returns the row (without the hash)."""
+    """Store a new API key (hash + plaintext). Returns the row."""
     data = {
         "org_slug": org_slug,
         "key_prefix": _key_prefix(api_key),
         "key_hash": _hash_key(api_key),
+        "key_plaintext": api_key,
         "is_active": True,
     }
     result = get_client().table("api_keys").insert(data).execute()
     return result.data[0] if result.data else data
+
+
+def get_active_api_key_plaintext(org_slug: str) -> Optional[str]:
+    """Get the active plaintext API key for an org."""
+    result = (
+        get_client()
+        .table("api_keys")
+        .select("key_plaintext")
+        .eq("org_slug", org_slug)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    if result.data and result.data[0].get("key_plaintext"):
+        return result.data[0]["key_plaintext"]
+    return None
 
 
 def validate_api_key(api_key: str) -> Optional[dict]:
@@ -553,16 +570,17 @@ def load_all_org_configs() -> dict:
     for org in orgs:
         slug = org["slug"]
 
-        # Get the active API key for this org
+        # Get the active API key for this org (plaintext + prefix)
         key_result = (
             get_client()
             .table("api_keys")
-            .select("key_prefix")
+            .select("key_prefix, key_plaintext")
             .eq("org_slug", slug)
             .eq("is_active", True)
             .limit(1)
             .execute()
         )
+        key_row = key_result.data[0] if key_result.data else {}
 
         configs[slug] = {
             "org_name": org["name"],
@@ -574,8 +592,7 @@ def load_all_org_configs() -> dict:
             "telegram_chat_id": org.get("telegram_chat_id") or "",
             "telegram_group_title": org.get("telegram_group_title") or "",
             "telegram_group_username": org.get("telegram_group_username") or "",
-            # api_key is validated via hash — we don't store plaintext in memory
-            # But we need a marker that this org exists
+            "api_key": key_row.get("key_plaintext") or "",
             "_has_api_key": bool(key_result.data),
         }
 
