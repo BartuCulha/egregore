@@ -2409,6 +2409,35 @@ async def health():
     return {"status": "ok", "service": "egregore-api", "supabase": USE_SUPABASE}
 
 
+@app.get("/api/admin/debug")
+async def admin_debug(admin_user: str = Depends(validate_admin_github_token)):
+    """Temporary: test each Supabase call individually to find the crash."""
+    if not USE_SUPABASE:
+        return {"error": "no supabase"}
+    from .services import supabase as sb
+    results = {}
+    for name, fn in [
+        ("list_orgs", lambda: sb.list_orgs()),
+        ("list_api_keys", lambda: sb.list_api_keys()),
+        ("get_all_memberships", lambda: sb.get_all_memberships()),
+        ("get_telemetry_events", lambda: sb.get_telemetry_events(limit=5)),
+    ]:
+        try:
+            data = fn()
+            results[name] = {"ok": True, "count": len(data)}
+        except Exception as e:
+            results[name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    # Also test Neo4j
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            r = await execute_system_query(seed_org, "MATCH (s:Session) WITH s.org AS org, count(s) AS cnt RETURN org, cnt")
+            results["neo4j_sessions"] = {"ok": True, "rows": len(r.get("values", []))}
+        except Exception as e:
+            results["neo4j_sessions"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return results
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
