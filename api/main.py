@@ -2335,6 +2335,21 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
         health.append({"type": "neo4j_key_slug_mismatch", "severity": "critical",
                        "detail": "Org node api_key slug doesn't match org slug"})
 
+    # Neo4j Person nodes (includes Telegram-only users not in Supabase)
+    graph_persons = []
+    if seed_org:
+        try:
+            result = await execute_system_query(seed_org, """
+                MATCH (p:Person {org: $slug})
+                RETURN p.name AS name, p.github AS github
+                ORDER BY p.name
+            """, {"slug": slug})
+            vals = result.get("values", [])
+            fields = result.get("fields", [])
+            graph_persons = [dict(zip(fields, row)) for row in vals] if vals else []
+        except Exception as e:
+            logger.warning(f"Admin org detail: graph persons failed for {slug}: {e}")
+
     # Org config (redact neo4j password)
     config = {
         "slug": org_row["slug"],
@@ -2363,6 +2378,7 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
     return {
         "config": config,
         "members": members_list,
+        "graph_persons": graph_persons,
         "api_keys": org_keys,
         "telemetry": telemetry,
         "neo4j_stats": neo4j_stats,
@@ -2370,6 +2386,31 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
         "isolation": isolation,
         "health": health,
     }
+
+
+@app.patch("/api/admin/org/{slug}")
+async def admin_patch_org(
+    slug: str,
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Patch org fields in Supabase. Allowed fields: created_at, name, transcript_sharing."""
+    from .services import supabase as sb
+
+    org_row = sb.get_org_by_slug(slug)
+    if not org_row:
+        raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
+
+    allowed = {"created_at", "name", "transcript_sharing"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
+
+    try:
+        sb.get_client().table("orgs").update(updates).eq("slug", slug).execute()
+        return {"patched": list(updates.keys()), "slug": slug}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
 
 
 @app.post("/api/admin/org/{slug}/fix-key")
@@ -2632,6 +2673,7 @@ async def admin_rename_org(
             "neo4j_user": old_org.get("neo4j_user", "neo4j"),
             "neo4j_password": old_org.get("neo4j_password", ""),
             "created_by": old_org.get("created_by"),
+            "created_at": old_org.get("created_at"),
             "telegram_chat_id": old_org.get("telegram_chat_id"),
             "telegram_group_title": old_org.get("telegram_group_title"),
             "telegram_group_username": old_org.get("telegram_group_username"),
