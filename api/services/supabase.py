@@ -406,6 +406,48 @@ def waitlist_approve(waitlist_id: int, approved_by_username: str) -> Optional[di
 
 
 # =============================================================================
+# TELEMETRY INGESTION
+# =============================================================================
+
+
+def ingest_telemetry_events(org_slug: str, events: list[dict]) -> int:
+    """Batch-insert telemetry events into the telemetry_events table.
+
+    Each event dict should have: ts, type, sid, org, user, data.
+    The org_slug is resolved server-side from the API key (never trust client).
+    Returns the number of events ingested.
+    """
+    if not events:
+        return 0
+
+    rows = []
+    for evt in events:
+        ts = evt.get("ts")
+        evt_type = evt.get("type")
+        session_id = evt.get("sid", "unknown")
+        user_handle = evt.get("user", "unknown")
+        data = evt.get("data", {})
+
+        if not ts or not evt_type:
+            continue
+
+        rows.append({
+            "ts": ts,
+            "type": evt_type,
+            "session_id": session_id,
+            "org_slug": org_slug,  # Server-resolved, not client-sent
+            "user_handle": user_handle,
+            "data": data,
+        })
+
+    if not rows:
+        return 0
+
+    result = get_client().table("telemetry_events").insert(rows).execute()
+    return len(result.data) if result.data else 0
+
+
+# =============================================================================
 # TELEGRAM EVENT LOGGING
 # =============================================================================
 

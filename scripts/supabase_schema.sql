@@ -118,6 +118,25 @@ CREATE TABLE IF NOT EXISTS telegram_events (
 CREATE INDEX IF NOT EXISTS idx_telegram_events_org ON telegram_events(org_slug);
 
 -- =============================================================================
+-- TELEMETRY EVENTS
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS telemetry_events (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ts          TIMESTAMPTZ NOT NULL,
+    type        TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    org_slug    TEXT NOT NULL,
+    user_handle TEXT NOT NULL,
+    data        JSONB NOT NULL DEFAULT '{}',
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_org_ts ON telemetry_events (org_slug, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_telemetry_type ON telemetry_events (type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_telemetry_session ON telemetry_events (session_id);
+
+-- =============================================================================
 -- HELPER: Auto-cleanup expired tokens (optional — can run via cron or pg_cron)
 -- =============================================================================
 
