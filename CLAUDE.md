@@ -428,60 +428,19 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 
 ## Command Awareness
 
-Commands are how you interact with Egregore's shared intelligence. When a user describes intent that maps to a command, suggest or invoke it — don't wait for them to type the slash.
+When a user describes intent that maps to a command, invoke it — don't wait for them to type the slash. Each command file has a `## When to invoke` section with trigger phrases and disambiguation. Load the command to get the full spec.
 
-### Core Loop — every session
+**Core loop** — `/activity` `/handoff` `/save` `/reflect` `/todo`
+**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting`
+**Coordination** — `/ask` `/quest` `/issue` `/invite`
+**Git** — `/branch` `/commit` `/push` `/pr` `/save`
+**Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release`
 
-| Command | What it does | Recognize when user says... |
-|---------|-------------|---------------------------|
-| `/activity` | Dashboard: handoffs, quests, PRs, team status | "catch me up", "what's going on", "show dashboard", "where did I leave off", "what happened" |
-| `/handoff` | End session with summary for next person (auto-saves) | "I'm done", "wrapping up", "leave notes", "pass this to [name]", "hand off" |
-| `/save` | Push changes without ending session | "push my work", "sync changes", "commit and push", "save everything" |
-| `/reflect` | Capture a decision, finding, or pattern | "we decided", "I realized", "I keep noticing", "capture this insight" |
-| `/todo` | Personal task list — add, check, review | "I need to remember", "add to my list", "what's on my plate", "mark done" |
-
-### Regular Use
-
-| Command | What it does |
-|---------|-------------|
-| `/deep-reflect` | Evidence-based deep analysis (multi-sample Opus, 60-90s). Needs 10+ existing artifacts. |
-| `/archive` | Capture prompt patterns — steering sequences that produced good AI output |
-| `/note` | Private scratch pad. Never shared unless explicitly promoted with `/note share` |
-| `/quest` | Manage open-ended explorations. List, create, contribute, prioritize |
-| `/ask [person]` | Route async question to a specific teammate via graph + Telegram |
-| `/issue` | Report a bug or problem. Auto-captures context, routes to GitHub |
-| `/meeting` | Ingest meeting knowledge from Granola with multi-agent analysis |
-| `/add` | Ingest an artifact — URL, paper, thought — with quest linking |
-
-### Disambiguation — when commands overlap
-
-**Capturing knowledge:**
-- `/reflect` — insight is ready to share → creates decision/finding/pattern in org knowledge
-- `/note` — thought is half-baked → stays private until you `/note share`
-- `/deep-reflect` — want Opus to cross-reference against the full knowledge base (slow, thorough)
-- `/archive` — insight is about *how to steer AI*, not about the work itself
-
-**Ending vs continuing:**
-- `/handoff` — you are leaving. Summarizes session, notifies recipient, auto-saves
-- `/save` — you are still working. Pushes changes, creates PR, keeps going
-
-**Things to do:**
-- `/todo` — personal task: "fix the retry logic"
-- `/quest` — team exploration: "figure out evaluation benchmarks"
-- `/issue` — something is broken: "/save drops CONTRIBUTED_BY links"
-
-**Asking questions:**
-- `/ask [person]` — async question to a specific teammate (graph-stored, Telegram-notified)
-- Just ask the agent — for questions it can answer from context and knowledge base
-
-### Situational
-
-`/branch` `/commit` `/push` `/pr` — git workflow | `/invite` — add someone | `/quest-suggest` — analyze quest drift | `/pull` — sync all repos | `/project` — show project status
-
-### Infrastructure (rarely invoked directly)
-
-`/setup` `/onboarding` `/tutorial` `/update` `/env` `/sync-repos` `/sync-public` — setup & maintenance
-`/release` `/deploy-site` `/deploy-preview` — release pipeline | `/docs` `/waitlist` — utility
+**Disambiguation** — when intent is ambiguous between similar commands:
+- Capturing knowledge: `/reflect` (share-ready) vs `/note` (half-baked) vs `/deep-reflect` (cross-reference) vs `/archive` (AI steering patterns)
+- Ending vs continuing: `/handoff` (leaving) vs `/save` (still working)
+- Things to do: `/todo` (personal task) vs `/quest` (team exploration) vs `/issue` (something broken)
+- Questions: `/ask [person]` (async to teammate) vs just asking (agent can answer from context)
 
 ## Identity
 

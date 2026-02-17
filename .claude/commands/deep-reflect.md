@@ -1,5 +1,11 @@
 Evidence-based deep analysis with signal-aware ontology. Iterative retrieval + multi-sample Opus reasoning over actual artifact content. Surfaces *signals* — any structurally significant relationship between the candidate insight and the existing knowledge base.
 
+## When to invoke
+
+User says: "deep dive on", "cross-reference this", "what does the knowledge base say about", "analyze this against what we know", "connect the dots"
+Not this: quick insight capture → `/reflect` · private thought → `/note` · AI steering pattern → `/archive`
+Prerequisite: needs 10+ existing artifacts in the graph to be useful
+
 Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.

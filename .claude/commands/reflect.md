@@ -1,5 +1,10 @@
 Capture insights from your work. The system uses graph context to surface what's worth reflecting on, asks Socratic follow-ups, and auto-classifies what emerges.
 
+## When to invoke
+
+User says: "we decided", "I realized", "I keep noticing", "capture this insight", "that's a pattern", "important takeaway", "let me record this"
+Not this: thought is half-baked/private → `/note` · want deep cross-referencing → `/deep-reflect` · insight is about AI steering → `/archive`
+
 Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.

@@ -2,6 +2,11 @@ Archive Mode
 
 Capture effective prompt patterns — sequences of human steering interventions that produced good AI reasoning — and store them in the shared knowledge base as reusable patterns.
 
+## When to invoke
+
+User says: "that prompt worked well", "save this prompting technique", "archive this steering pattern", "the way I phrased that got great results"
+Not this: insight about the work itself → `/reflect` · private thought → `/note`
+
 Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.
