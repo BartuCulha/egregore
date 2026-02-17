@@ -491,6 +491,55 @@ def log_telegram_event(
 # =============================================================================
 
 
+def list_api_keys() -> list[dict]:
+    """List all API keys (prefix and metadata only, never hashes)."""
+    result = (
+        get_client()
+        .table("api_keys")
+        .select("org_slug, key_prefix, is_active, created_at, revoked_at")
+        .execute()
+    )
+    return result.data or []
+
+
+def get_all_memberships() -> list[dict]:
+    """Get all memberships across all orgs, with user details."""
+    result = (
+        get_client()
+        .table("memberships")
+        .select("*, users(github_username, github_name, avatar_url, telegram_username)")
+        .execute()
+    )
+    return result.data or []
+
+
+def get_telemetry_events(
+    org_slug: Optional[str] = None,
+    event_type: Optional[str] = None,
+    user_handle: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Get telemetry events with optional filters."""
+    query = (
+        get_client()
+        .table("telemetry_events")
+        .select("*")
+        .order("ts", desc=True)
+        .limit(min(limit, 500))
+    )
+    if org_slug:
+        query = query.eq("org_slug", org_slug)
+    if event_type:
+        query = query.eq("type", event_type)
+    if user_handle:
+        query = query.eq("user_handle", user_handle)
+    if since:
+        query = query.gte("ts", since)
+    result = query.execute()
+    return result.data or []
+
+
 def load_all_org_configs() -> dict:
     """Load all org configs from Supabase into a dict keyed by slug.
 
