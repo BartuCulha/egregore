@@ -1,5 +1,10 @@
 End a session with a summary for the next person (or future you). With no arguments, triages open handoffs first.
 
+## When to invoke
+
+User says: "I'm done", "wrapping up", "leave notes", "pass this to [name]", "hand off", "done for now", "signing off"
+Not this: user wants to push but keep working → `/save`
+
 Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.

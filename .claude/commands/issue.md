@@ -1,5 +1,10 @@
 Report an issue. Captures context automatically, routes to memory/graph/GitHub.
 
+## When to invoke
+
+User says: "this is broken", "bug in", "something's wrong with", "file an issue", "report a problem", "[command] isn't working"
+Not this: personal task → `/todo` · team exploration → `/quest`
+
 Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after (create mode only).

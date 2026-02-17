@@ -1,5 +1,10 @@
 Save your contributions to Egregore. Pushes working branch, creates PR to develop.
 
+## When to invoke
+
+User says: "push my work", "sync changes", "commit and push", "save everything", "push this up"
+Not this: user is leaving/done → `/handoff` (which auto-saves)
+
 ## Execution rules
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines (e.g. "Synced 2 sessions, 1 artifact to graph").
