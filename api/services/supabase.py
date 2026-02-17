@@ -496,7 +496,7 @@ def list_api_keys() -> list[dict]:
     result = (
         get_client()
         .table("api_keys")
-        .select("org_slug, key_prefix, is_active, created_at, revoked_at")
+        .select("org_slug, key_prefix, is_active, created_at")
         .execute()
     )
     return result.data or []

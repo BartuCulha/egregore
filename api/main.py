@@ -1985,10 +1985,22 @@ async def admin_dashboard(admin_user: str = Depends(validate_admin_github_token)
 
     from .services import supabase as sb
 
-    orgs = sb.list_orgs()
-    all_memberships = sb.get_all_memberships()
-    all_keys = sb.list_api_keys()
-    recent_telemetry = sb.get_telemetry_events(limit=500)
+    try:
+        orgs = sb.list_orgs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_orgs failed: {e}")
+    try:
+        all_memberships = sb.get_all_memberships()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_all_memberships failed: {e}")
+    try:
+        all_keys = sb.list_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_api_keys failed: {e}")
+    try:
+        recent_telemetry = sb.get_telemetry_events(limit=500)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_telemetry_events failed: {e}")
 
     # Index memberships by org
     memberships_by_org = {}
@@ -2156,11 +2168,20 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
     if not org_row:
         raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
 
-    members = sb.get_memberships(slug)
-    telemetry = sb.get_telemetry_events(org_slug=slug, limit=50)
+    try:
+        members = sb.get_memberships(slug)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_memberships failed: {e}")
+    try:
+        telemetry = sb.get_telemetry_events(org_slug=slug, limit=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_telemetry_events failed: {e}")
 
     # API keys (prefix only)
-    all_keys = sb.list_api_keys()
+    try:
+        all_keys = sb.list_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_api_keys failed: {e}")
     org_keys = [
         {"key_prefix": k["key_prefix"], "is_active": k["is_active"], "created_at": k.get("created_at")}
         for k in all_keys
@@ -2386,6 +2407,35 @@ async def admin_telemetry(
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "egregore-api", "supabase": USE_SUPABASE}
+
+
+@app.get("/api/admin/debug")
+async def admin_debug(admin_user: str = Depends(validate_admin_github_token)):
+    """Temporary: test each Supabase call individually to find the crash."""
+    if not USE_SUPABASE:
+        return {"error": "no supabase"}
+    from .services import supabase as sb
+    results = {}
+    for name, fn in [
+        ("list_orgs", lambda: sb.list_orgs()),
+        ("list_api_keys", lambda: sb.list_api_keys()),
+        ("get_all_memberships", lambda: sb.get_all_memberships()),
+        ("get_telemetry_events", lambda: sb.get_telemetry_events(limit=5)),
+    ]:
+        try:
+            data = fn()
+            results[name] = {"ok": True, "count": len(data)}
+        except Exception as e:
+            results[name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    # Also test Neo4j
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            r = await execute_system_query(seed_org, "MATCH (s:Session) WITH s.org AS org, count(s) AS cnt RETURN org, cnt")
+            results["neo4j_sessions"] = {"ok": True, "rows": len(r.get("values", []))}
+        except Exception as e:
+            results["neo4j_sessions"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return results
 
 
 if __name__ == "__main__":
