@@ -15,7 +15,7 @@ import secrets
 from dotenv import load_dotenv
 load_dotenv(override=False)
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, File, Form, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import (
@@ -1869,6 +1869,54 @@ async def transcript_upload(
         logger.warning(f"Transcript indexing failed for {session_id} (stored OK): {e}")
 
     return {"status": "uploaded", "session_id": session_id, "storage_path": storage_path}
+
+
+# =============================================================================
+# TELEMETRY INGESTION
+# =============================================================================
+
+
+MAX_TELEMETRY_BODY = 2 * 1024 * 1024  # 2MB max payload
+
+
+@app.post("/api/telemetry/ingest")
+async def telemetry_ingest(request: Request, org: dict = Depends(validate_api_key)):
+    """Ingest telemetry events from client JSONL buffer.
+
+    Body: NDJSON (one JSON object per line).
+    Auth: Bearer {EGREGORE_API_KEY} (same as graph/notify).
+    Server resolves org_slug from API key — never trusts client-sent org.
+    """
+    if not USE_SUPABASE:
+        return {"ingested": 0, "reason": "telemetry requires supabase"}
+
+    body = await request.body()
+    if len(body) > MAX_TELEMETRY_BODY:
+        raise HTTPException(status_code=413, detail="Telemetry payload exceeds 2MB limit")
+
+    # Parse NDJSON
+    events = []
+    for line in body.decode("utf-8", errors="replace").strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # Skip malformed lines
+
+    if not events:
+        return {"ingested": 0}
+
+    org_slug = org.get("slug", "unknown")
+
+    try:
+        from .services.supabase import ingest_telemetry_events
+        count = ingest_telemetry_events(org_slug, events)
+        return {"ingested": count}
+    except Exception as e:
+        logger.error(f"Telemetry ingestion failed for {org_slug}: {e}")
+        raise HTTPException(status_code=503, detail="Failed to ingest telemetry events")
 
 
 # =============================================================================
