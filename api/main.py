@@ -2142,6 +2142,10 @@ async def admin_dashboard(admin_user: str = Depends(validate_admin_github_token)
             "created_at": org_row.get("created_at"),
             "created_by": org_row.get("created_by"),
             "member_count": len(active_members),
+            "members": [
+                m["users"].get("github_username", "")
+                for m in active_members if m.get("users")
+            ],
             "last_activity": last_activity_by_org.get(slug),
             "telegram_connected": bool(org_row.get("telegram_chat_id")),
             "telegram_group_title": org_row.get("telegram_group_title"),
@@ -2529,6 +2533,31 @@ async def admin_graph_query(
     for keyword in ("CREATE", "MERGE", "DELETE", "DETACH", "SET ", "REMOVE "):
         if keyword in upper:
             raise HTTPException(status_code=400, detail=f"Write operations not allowed: {keyword.strip()}")
+
+    seed_org = _get_seed_org()
+    if not seed_org:
+        raise HTTPException(status_code=503, detail="No Neo4j access available")
+
+    try:
+        result = await execute_system_query(seed_org, statement, body.get("params", {}))
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Query failed: {e}")
+
+
+@app.post("/api/admin/graph-write")
+async def admin_graph_write(
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Run a write Cypher query against the shared customer Neo4j database.
+
+    Body: {"statement": "MATCH (n) ...", "params": {}}
+    Admin-only. For cleanup and migration operations.
+    """
+    statement = body.get("statement", "")
+    if not statement:
+        raise HTTPException(status_code=400, detail="Missing 'statement' field")
 
     seed_org = _get_seed_org()
     if not seed_org:
