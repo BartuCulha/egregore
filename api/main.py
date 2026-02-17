@@ -2586,8 +2586,15 @@ async def admin_rename_org(
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Failed to clean up ghost org: {e}")
 
-    # Step 2: Create new org row with new_slug (copy all fields from old org)
+    # Step 2: Null out unique fields on old row, then create new row with those values
     try:
+        # Clear unique-constrained fields on old row first
+        get_client().table("orgs").update({
+            "telegram_chat_id": None,
+            "telegram_group_title": None,
+            "telegram_group_username": None,
+        }).eq("slug", old_slug).execute()
+
         new_org_data = {
             "slug": new_slug,
             "name": old_org.get("name", ""),
