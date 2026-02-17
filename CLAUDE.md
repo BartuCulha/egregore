@@ -424,8 +424,64 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 - Check `memory/knowledge/` before starting unfamiliar work
 - Document significant decisions in `memory/knowledge/decisions/`
 - After substantial sessions, log to `memory/handoffs/` and update `index.md`
-- Use `/handoff` when leaving work for others to pick up
-- Use `/save` to commit and push contributions
+- See **Command Awareness** below for when to use each command
+
+## Command Awareness
+
+Commands are how you interact with Egregore's shared intelligence. When a user describes intent that maps to a command, suggest or invoke it — don't wait for them to type the slash.
+
+### Core Loop — every session
+
+| Command | What it does | Recognize when user says... |
+|---------|-------------|---------------------------|
+| `/activity` | Dashboard: handoffs, quests, PRs, team status | "catch me up", "what's going on", "show dashboard", "where did I leave off", "what happened" |
+| `/handoff` | End session with summary for next person (auto-saves) | "I'm done", "wrapping up", "leave notes", "pass this to [name]", "hand off" |
+| `/save` | Push changes without ending session | "push my work", "sync changes", "commit and push", "save everything" |
+| `/reflect` | Capture a decision, finding, or pattern | "we decided", "I realized", "I keep noticing", "capture this insight" |
+| `/todo` | Personal task list — add, check, review | "I need to remember", "add to my list", "what's on my plate", "mark done" |
+
+### Regular Use
+
+| Command | What it does |
+|---------|-------------|
+| `/deep-reflect` | Evidence-based deep analysis (multi-sample Opus, 60-90s). Needs 10+ existing artifacts. |
+| `/archive` | Capture prompt patterns — steering sequences that produced good AI output |
+| `/note` | Private scratch pad. Never shared unless explicitly promoted with `/note share` |
+| `/quest` | Manage open-ended explorations. List, create, contribute, prioritize |
+| `/ask [person]` | Route async question to a specific teammate via graph + Telegram |
+| `/issue` | Report a bug or problem. Auto-captures context, routes to GitHub |
+| `/meeting` | Ingest meeting knowledge from Granola with multi-agent analysis |
+| `/add` | Ingest an artifact — URL, paper, thought — with quest linking |
+
+### Disambiguation — when commands overlap
+
+**Capturing knowledge:**
+- `/reflect` — insight is ready to share → creates decision/finding/pattern in org knowledge
+- `/note` — thought is half-baked → stays private until you `/note share`
+- `/deep-reflect` — want Opus to cross-reference against the full knowledge base (slow, thorough)
+- `/archive` — insight is about *how to steer AI*, not about the work itself
+
+**Ending vs continuing:**
+- `/handoff` — you are leaving. Summarizes session, notifies recipient, auto-saves
+- `/save` — you are still working. Pushes changes, creates PR, keeps going
+
+**Things to do:**
+- `/todo` — personal task: "fix the retry logic"
+- `/quest` — team exploration: "figure out evaluation benchmarks"
+- `/issue` — something is broken: "/save drops CONTRIBUTED_BY links"
+
+**Asking questions:**
+- `/ask [person]` — async question to a specific teammate (graph-stored, Telegram-notified)
+- Just ask the agent — for questions it can answer from context and knowledge base
+
+### Situational
+
+`/branch` `/commit` `/push` `/pr` — git workflow | `/invite` — add someone | `/quest-suggest` — analyze quest drift | `/pull` — sync all repos | `/project` — show project status
+
+### Infrastructure (rarely invoked directly)
+
+`/setup` `/onboarding` `/tutorial` `/update` `/env` `/sync-repos` `/sync-public` — setup & maintenance
+`/release` `/deploy-site` `/deploy-preview` — release pipeline | `/docs` `/waitlist` — utility
 
 ## Identity
 
