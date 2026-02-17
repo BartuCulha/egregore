@@ -270,7 +270,11 @@ async def org_get_key(slug: str, authorization: str = Header(...)):
         else:
             raise HTTPException(status_code=401, detail="Could not verify org membership")
 
-    return {"api_key": org["api_key"], "org_slug": slug}
+    api_key = await _get_org_api_key(org, slug)
+    if not api_key:
+        raise HTTPException(status_code=503, detail="API key not available. Contact your team admin.")
+
+    return {"api_key": api_key, "org_slug": slug}
 
 
 # =============================================================================
@@ -303,8 +307,9 @@ async def org_register(body: OrgRegister, authorization: str = Header(...)):
 
     # Check if org already exists
     if slug in ORG_CONFIGS:
+        existing_key = await _get_org_api_key(ORG_CONFIGS[slug], slug)
         return {
-            "api_key": ORG_CONFIGS[slug]["api_key"],
+            "api_key": existing_key,
             "org_slug": slug,
             "status": "existing",
         }
@@ -701,12 +706,17 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
     fork_url = f"https://github.com/{owner}/{body.repo_name}.git"
     api_url = config.get("api_url", "")
 
-    # Look up org's API key — prefer slug from config, fall back to computing from owner
-    slug = config.get("slug", owner.lower().replace("-", "").replace(" ", ""))
+    # Look up org's API key — slug must come from egregore.json config
+    slug = config.get("slug")
+    if not slug:
+        raise HTTPException(
+            status_code=400,
+            detail="egregore.json is missing 'slug' field. Run setup again or add it manually.",
+        )
     repos = config.get("repos", [])
     # Person node creation deferred to first session start (avoids orphaned nodes)
     org_config = ORG_CONFIGS.get(slug)
-    api_key = org_config.get("api_key", "") if org_config else ""
+    api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
     # Generate Telegram group invite if configured
     telegram_group_link = None
@@ -1125,6 +1135,39 @@ async def github_client_id():
 # =============================================================================
 
 
+async def _get_org_api_key(org_config: dict, slug: str) -> str:
+    """Retrieve the org's plaintext API key.
+
+    Priority: in-memory ORG_CONFIGS → Neo4j Org node.
+    Supabase only stores hashes, so when the API restarts and reloads from
+    Supabase, the plaintext key is lost. The Neo4j Org node still has it
+    (written during /api/org/setup). Fall back to that.
+    """
+    # 1. Check in-memory config
+    key = org_config.get("api_key", "")
+    if key:
+        return key
+
+    # 2. Retrieve from Neo4j Org node (stores plaintext from setup)
+    try:
+        result = await execute_system_query(org_config, """
+            MATCH (o:Org {id: $slug})
+            RETURN o.api_key AS api_key
+        """, {"slug": slug})
+        values = result.get("values", [])
+        if values and values[0] and values[0][0]:
+            key = values[0][0]
+            # Cache in memory so subsequent calls don't hit Neo4j
+            org_config["api_key"] = key
+            if slug in ORG_CONFIGS:
+                ORG_CONFIGS[slug]["api_key"] = key
+            return key
+    except Exception as e:
+        logger.warning(f"Failed to retrieve API key from Neo4j for {slug}: {e}")
+
+    return ""
+
+
 def _get_seed_org() -> dict | None:
     """Get a seed org config with Neo4j access for cross-org queries.
 
@@ -1360,13 +1403,18 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
     # Read org config for the invite token
     config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
     org_name = owner
-    slug = owner.lower().replace("-", "").replace(" ", "")
+    slug = None
     repos = []
     if config_raw:
         config = json.loads(config_raw)
         org_name = config.get("org_name", owner)
-        slug = config.get("slug", slug)
+        slug = config.get("slug")
         repos = config.get("repos", [])
+    if not slug:
+        raise HTTPException(
+            status_code=400,
+            detail="egregore.json is missing 'slug' field. Org setup may be incomplete.",
+        )
 
         # Add as collaborator on the memory repo
         memory_repo = config.get("memory_repo", f"{owner}-memory")
@@ -1441,7 +1489,12 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         raise HTTPException(status_code=401, detail="Invalid GitHub token")
 
     owner = invite_data["github_org"]
-    slug = invite_data.get("slug", owner.lower().replace("-", "").replace(" ", ""))
+    slug = invite_data.get("slug")
+    if not slug:
+        raise HTTPException(
+            status_code=400,
+            detail="Invite token is missing 'slug'. It may have been created before slug was added to invites. Ask the admin to send a new invite.",
+        )
     is_personal = invite_data.get("is_personal", False)
 
     if is_personal:
@@ -1537,7 +1590,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     claim_token(invite_token)
 
     # Get API key from server config (not from egregore.json — secrets don't go in git)
-    api_key = org_config.get("api_key", "") if org_config else ""
+    api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
     # Generate setup token for npx installer
     setup_token = create_token({
@@ -1917,6 +1970,412 @@ async def telemetry_ingest(request: Request, org: dict = Depends(validate_api_ke
     except Exception as e:
         logger.error(f"Telemetry ingestion failed for {org_slug}: {e}")
         raise HTTPException(status_code=503, detail="Failed to ingest telemetry events")
+
+
+# =============================================================================
+# ADMIN DASHBOARD
+# =============================================================================
+
+
+@app.get("/api/admin/dashboard")
+async def admin_dashboard(admin_user: str = Depends(validate_admin_github_token)):
+    """Admin overview: all orgs with health checks, member counts, telemetry stats."""
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Admin dashboard requires Supabase")
+
+    from .services import supabase as sb
+
+    orgs = sb.list_orgs()
+    all_memberships = sb.get_all_memberships()
+    all_keys = sb.list_api_keys()
+    recent_telemetry = sb.get_telemetry_events(limit=500)
+
+    # Index memberships by org
+    memberships_by_org = {}
+    for m in all_memberships:
+        slug = m.get("org_slug", "")
+        memberships_by_org.setdefault(slug, []).append(m)
+
+    # Index keys by org
+    keys_by_org = {}
+    for k in all_keys:
+        slug = k.get("org_slug", "")
+        keys_by_org.setdefault(slug, []).append(k)
+
+    # Index telemetry by org for last_activity
+    last_activity_by_org = {}
+    telemetry_count_by_org = {}
+    for evt in recent_telemetry:
+        slug = evt.get("org_slug", "")
+        ts = evt.get("ts", "")
+        if slug not in last_activity_by_org or ts > last_activity_by_org[slug]:
+            last_activity_by_org[slug] = ts
+        telemetry_count_by_org[slug] = telemetry_count_by_org.get(slug, 0) + 1
+
+    # Get session counts + Org node status from Neo4j (best-effort)
+    session_counts = {}
+    neo4j_org_nodes = {}  # slug → {has_api_key, api_key_slug_match}
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            result = await execute_system_query(seed_org, """
+                MATCH (s:Session)
+                WITH s.org AS org, count(s) AS cnt
+                RETURN org, cnt
+            """)
+            for row in result.get("values", []):
+                if row and len(row) >= 2 and row[0]:
+                    session_counts[row[0]] = row[1]
+        except Exception as e:
+            logger.warning(f"Admin dashboard: Neo4j session count failed: {e}")
+
+        # Check Org nodes for API key presence and slug match
+        try:
+            result = await execute_system_query(seed_org, """
+                MATCH (o:Org)
+                RETURN o.id AS slug,
+                       o.api_key IS NOT NULL AS has_key,
+                       CASE WHEN o.api_key IS NOT NULL
+                            THEN split(o.api_key, '_')[1]
+                            ELSE null END AS key_slug
+            """)
+            for row in result.get("values", []):
+                if row and row[0]:
+                    neo4j_org_nodes[row[0]] = {
+                        "has_api_key": bool(row[1]),
+                        "key_slug_match": row[2] == row[0] if row[2] else None,
+                    }
+        except Exception as e:
+            logger.warning(f"Admin dashboard: Neo4j Org node check failed: {e}")
+
+    all_alerts = []
+    org_results = []
+
+    for org_row in orgs:
+        slug = org_row["slug"]
+        org_keys = keys_by_org.get(slug, [])
+        org_members = memberships_by_org.get(slug, [])
+        active_keys = [k for k in org_keys if k.get("is_active")]
+
+        health = []
+
+        # Health check: key slug mismatch
+        for k in active_keys:
+            prefix = k.get("key_prefix", "")
+            # ek_{slug}_{hash8} — extract slug part
+            parts = prefix.split("_")
+            if len(parts) >= 3:
+                key_slug = parts[1]
+                if key_slug != slug:
+                    issue = {
+                        "type": "key_slug_mismatch",
+                        "severity": "critical",
+                        "detail": f"Key prefix ek_{key_slug}_... doesn't match org slug {slug}",
+                    }
+                    health.append(issue)
+                    all_alerts.append({**issue, "org_slug": slug})
+
+        # Health check: no active API key
+        if not active_keys:
+            issue = {"type": "no_active_key", "severity": "warning", "detail": "No active API key"}
+            health.append(issue)
+            all_alerts.append({**issue, "org_slug": slug})
+
+        # Health check: no Telegram
+        if not org_row.get("telegram_chat_id"):
+            health.append({"type": "no_telegram", "severity": "info", "detail": "Telegram not connected"})
+
+        # Health check: no active members
+        active_members = [m for m in org_members if m.get("status") == "active"]
+        if not active_members:
+            issue = {"type": "no_active_members", "severity": "warning", "detail": "No active members"}
+            health.append(issue)
+            all_alerts.append({**issue, "org_slug": slug})
+
+        # Health check: Neo4j Org node missing or has no API key
+        neo4j_node = neo4j_org_nodes.get(slug)
+        if not neo4j_node:
+            issue = {"type": "no_neo4j_org_node", "severity": "warning", "detail": "No Org node in Neo4j graph"}
+            health.append(issue)
+            all_alerts.append({**issue, "org_slug": slug})
+        elif not neo4j_node.get("has_api_key"):
+            issue = {"type": "neo4j_no_api_key", "severity": "warning", "detail": "Org node in Neo4j has no api_key"}
+            health.append(issue)
+            all_alerts.append({**issue, "org_slug": slug})
+        elif neo4j_node.get("key_slug_match") is False:
+            issue = {"type": "neo4j_key_slug_mismatch", "severity": "critical",
+                     "detail": "Org node api_key slug doesn't match org slug"}
+            health.append(issue)
+            all_alerts.append({**issue, "org_slug": slug})
+
+        # Neo4j host info
+        neo4j_host = org_row.get("neo4j_host", "")
+        neo4j_host_short = neo4j_host.split(".")[0] if neo4j_host else ""
+
+        org_results.append({
+            "slug": slug,
+            "name": org_row.get("name", slug),
+            "github_org": org_row.get("github_org", ""),
+            "created_at": org_row.get("created_at"),
+            "created_by": org_row.get("created_by"),
+            "member_count": len(active_members),
+            "last_activity": last_activity_by_org.get(slug),
+            "telegram_connected": bool(org_row.get("telegram_chat_id")),
+            "telegram_group_title": org_row.get("telegram_group_title"),
+            "has_active_key": bool(active_keys),
+            "key_prefix": active_keys[0]["key_prefix"] if active_keys else None,
+            "session_count": session_counts.get(slug, 0),
+            "neo4j_host": neo4j_host_short,
+            "neo4j_org_node": bool(neo4j_node),
+            "neo4j_has_key": neo4j_node.get("has_api_key", False) if neo4j_node else False,
+            "health": health,
+        })
+
+    unique_users = set()
+    for m in all_memberships:
+        if m.get("status") == "active" and m.get("users"):
+            unique_users.add(m["users"].get("github_username", ""))
+
+    return {
+        "orgs": org_results,
+        "total_orgs": len(orgs),
+        "total_users": len(unique_users),
+        "alerts": [a for a in all_alerts if a.get("severity") in ("critical", "warning")],
+    }
+
+
+@app.get("/api/admin/org/{slug}")
+async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Detailed admin view for a single org."""
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Admin dashboard requires Supabase")
+
+    from .services import supabase as sb
+
+    org_row = sb.get_org_by_slug(slug)
+    if not org_row:
+        raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
+
+    members = sb.get_memberships(slug)
+    telemetry = sb.get_telemetry_events(org_slug=slug, limit=50)
+
+    # API keys (prefix only)
+    all_keys = sb.list_api_keys()
+    org_keys = [
+        {"key_prefix": k["key_prefix"], "is_active": k["is_active"], "created_at": k.get("created_at")}
+        for k in all_keys
+        if k.get("org_slug") == slug
+    ]
+
+    # Neo4j node counts + isolation checks (best-effort)
+    neo4j_stats = {}
+    isolation = {"status": "unknown", "checks": []}
+    neo4j_org_node_info = {}
+    seed_org = _get_seed_org()
+    if seed_org:
+        try:
+            for label in ["Person", "Session", "Quest", "Artifact"]:
+                result = await execute_system_query(seed_org, f"""
+                    MATCH (n:{label}) WHERE n.org = $slug
+                    RETURN count(n) AS cnt
+                """, {"slug": slug})
+                vals = result.get("values", [])
+                neo4j_stats[label] = vals[0][0] if vals and vals[0] else 0
+        except Exception as e:
+            logger.warning(f"Admin org detail: Neo4j stats failed for {slug}: {e}")
+
+        # Check Org node in Neo4j
+        try:
+            result = await execute_system_query(seed_org, """
+                MATCH (o:Org {id: $slug})
+                RETURN o.api_key IS NOT NULL AS has_key,
+                       CASE WHEN o.api_key IS NOT NULL
+                            THEN split(o.api_key, '_')[1]
+                            ELSE null END AS key_slug,
+                       o.name AS name
+            """, {"slug": slug})
+            vals = result.get("values", [])
+            if vals and vals[0]:
+                neo4j_org_node_info = {
+                    "exists": True,
+                    "has_api_key": bool(vals[0][0]),
+                    "key_slug_match": vals[0][1] == slug if vals[0][1] else None,
+                }
+            else:
+                neo4j_org_node_info = {"exists": False, "has_api_key": False, "key_slug_match": None}
+        except Exception as e:
+            logger.warning(f"Admin org detail: Org node check failed for {slug}: {e}")
+
+        # Isolation check: verify no cross-org data leakage
+        try:
+            # Check if any nodes with wrong org scope exist on this org's database
+            result = await execute_system_query(seed_org, """
+                MATCH (n)
+                WHERE n.org IS NOT NULL AND n.org <> $slug
+                  AND NOT n:Org AND NOT n:TelegramUser
+                WITH n.org AS other_org, labels(n)[0] AS label, count(n) AS cnt
+                RETURN other_org, label, cnt
+                ORDER BY cnt DESC LIMIT 5
+            """, {"slug": slug})
+            vals = result.get("values", [])
+            if vals and vals[0] and vals[0][0]:
+                # Other org data found on same database — expected for shared DB
+                other_orgs = [{"org": row[0], "label": row[1], "count": row[2]} for row in vals if row[0]]
+                isolation["checks"].append({
+                    "check": "shared_database",
+                    "status": "info",
+                    "detail": f"Shared DB with {len(set(r['org'] for r in other_orgs))} other org(s) — isolation via org scope",
+                    "other_orgs": [r["org"] for r in other_orgs[:5]],
+                })
+            else:
+                isolation["checks"].append({
+                    "check": "dedicated_database",
+                    "status": "ok",
+                    "detail": "Dedicated database — no other org data present",
+                })
+        except Exception as e:
+            logger.warning(f"Admin org detail: isolation check failed for {slug}: {e}")
+
+        # Isolation check: verify org scope is present on this org's data
+        try:
+            result = await execute_system_query(seed_org, """
+                MATCH (s:Session)
+                WHERE s.org = $slug
+                RETURN count(s) AS scoped
+                UNION ALL
+                MATCH (s:Session)
+                WHERE s.org IS NULL
+                RETURN count(s) AS scoped
+            """, {"slug": slug})
+            vals = result.get("values", [])
+            scoped = vals[0][0] if vals and vals[0] else 0
+            unscoped = vals[1][0] if vals and len(vals) > 1 and vals[1] else 0
+            if unscoped > 0:
+                isolation["checks"].append({
+                    "check": "unscoped_sessions",
+                    "status": "warning",
+                    "detail": f"{unscoped} sessions missing org scope (pre-migration data)",
+                })
+            else:
+                isolation["checks"].append({
+                    "check": "all_sessions_scoped",
+                    "status": "ok",
+                    "detail": f"All {scoped} sessions properly scoped to '{slug}'",
+                })
+        except Exception as e:
+            logger.warning(f"Admin org detail: scope check failed for {slug}: {e}")
+
+        # Derive overall isolation status
+        statuses = [c["status"] for c in isolation["checks"]]
+        if "warning" in statuses or "critical" in statuses:
+            isolation["status"] = "warning"
+        elif statuses:
+            isolation["status"] = "ok"
+
+    # Health diagnostics (same logic as dashboard + isolation)
+    health = []
+    active_keys = [k for k in org_keys if k.get("is_active")]
+    for k in active_keys:
+        parts = k["key_prefix"].split("_")
+        if len(parts) >= 3 and parts[1] != slug:
+            health.append({
+                "type": "key_slug_mismatch", "severity": "critical",
+                "detail": f"Key prefix {k['key_prefix']} doesn't match org slug {slug}",
+            })
+    if not active_keys:
+        health.append({"type": "no_active_key", "severity": "warning", "detail": "No active API key"})
+    if not org_row.get("telegram_chat_id"):
+        health.append({"type": "no_telegram", "severity": "info", "detail": "Telegram not connected"})
+    active_members = [m for m in members if m.get("status") == "active"]
+    if not active_members:
+        health.append({"type": "no_active_members", "severity": "warning", "detail": "No active members"})
+
+    # Health: Neo4j Org node
+    if neo4j_org_node_info.get("exists") is False:
+        health.append({"type": "no_neo4j_org_node", "severity": "warning", "detail": "No Org node in Neo4j graph"})
+    elif not neo4j_org_node_info.get("has_api_key"):
+        health.append({"type": "neo4j_no_api_key", "severity": "warning", "detail": "Org node in Neo4j has no api_key"})
+    elif neo4j_org_node_info.get("key_slug_match") is False:
+        health.append({"type": "neo4j_key_slug_mismatch", "severity": "critical",
+                       "detail": "Org node api_key slug doesn't match org slug"})
+
+    # Org config (redact neo4j password)
+    config = {
+        "slug": org_row["slug"],
+        "name": org_row.get("name", ""),
+        "github_org": org_row.get("github_org", ""),
+        "created_at": org_row.get("created_at"),
+        "created_by": org_row.get("created_by"),
+        "neo4j_host": org_row.get("neo4j_host", ""),
+        "telegram_chat_id": org_row.get("telegram_chat_id"),
+        "telegram_group_title": org_row.get("telegram_group_title"),
+        "transcript_sharing": org_row.get("transcript_sharing", False),
+    }
+
+    members_list = [
+        {
+            "github_username": m["users"]["github_username"] if m.get("users") else None,
+            "github_name": m["users"]["github_name"] if m.get("users") else None,
+            "telegram_username": m["users"]["telegram_username"] if m.get("users") else None,
+            "role": m.get("role"),
+            "status": m.get("status"),
+            "joined_at": m.get("joined_at"),
+        }
+        for m in members
+    ]
+
+    return {
+        "config": config,
+        "members": members_list,
+        "api_keys": org_keys,
+        "telemetry": telemetry,
+        "neo4j_stats": neo4j_stats,
+        "neo4j_org_node": neo4j_org_node_info,
+        "isolation": isolation,
+        "health": health,
+    }
+
+
+@app.get("/api/admin/telemetry")
+async def admin_telemetry(
+    org_slug: str = Query(None),
+    event_type: str = Query(None),
+    user_handle: str = Query(None),
+    since: str = Query(None),
+    limit: int = Query(100, le=500),
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Filterable telemetry feed for admins."""
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Telemetry requires Supabase")
+
+    from .services import supabase as sb
+
+    events = sb.get_telemetry_events(
+        org_slug=org_slug,
+        event_type=event_type,
+        user_handle=user_handle,
+        since=since,
+        limit=limit,
+    )
+
+    # Compute aggregates
+    by_type = {}
+    by_org = {}
+    for evt in events:
+        t = evt.get("type", "unknown")
+        o = evt.get("org_slug", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+        by_org[o] = by_org.get(o, 0) + 1
+
+    return {
+        "events": events,
+        "count": len(events),
+        "aggregates": {
+            "by_type": by_type,
+            "by_org": by_org,
+        },
+    }
 
 
 # =============================================================================
