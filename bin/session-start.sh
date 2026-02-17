@@ -353,8 +353,11 @@ if [[ "$CURRENT_BRANCH" != "develop" ]]; then
     fi
   fi
 
-  # Switch to develop
+  # Switch to develop (already updated by fetch origin develop:develop above)
   git checkout develop --quiet 2>/dev/null || true
+else
+  # Already on develop — fetch couldn't update it (checked-out branch), so pull
+  git merge --ff-only origin/develop --quiet 2>/dev/null || true
 fi
 
 BRANCH="develop"
