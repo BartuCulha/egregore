@@ -71,7 +71,7 @@ async def _team_sessions(org: dict, me: str) -> dict:
     """Q2: Team sessions (7 days)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person)
-        WHERE p.name <> $me AND date(s.date) >= date() - duration('P7D')
+        WHERE p.name <> $me AND date(left(toString(s.date), 10)) >= date() - duration('P7D')
         RETURN s.date AS date, s.topic AS topic, p.name AS by
         ORDER BY s.date DESC LIMIT 5
     """, {"me": me})
@@ -89,8 +89,8 @@ async def _quests(org: dict, me: str) -> dict:
         WHERE (myArt)-[:CONTRIBUTED_BY]->(:Person {name: $me})
         WITH q, count(DISTINCT a) AS artifacts, count(DISTINCT p) AS contributors,
              CASE WHEN count(a) > 0
-               THEN duration.inDays(date(max(a.created)), date()).days
-               ELSE duration.inDays(date(q.started), date()).days END AS daysSince,
+               THEN duration.inDays(date(left(toString(max(a.created)), 10)), date()).days
+               ELSE duration.inDays(date(left(toString(q.started), 10)), date()).days END AS daysSince,
              coalesce(q.priority, 0) AS priority,
              CASE WHEN starter IS NOT NULL THEN 1 ELSE 0 END AS iStarted,
              count(DISTINCT myArt) AS myArtifacts
@@ -145,7 +145,7 @@ async def _resolve_and_fetch_handoffs(org: dict, me: str) -> tuple[dict, dict]:
 
     handoffs_to_me = await execute_query(org, """
         MATCH (s:Session)-[:HANDED_TO]->(p:Person {name: $me})
-        WHERE date(s.date) >= date() - duration('P7D')
+        WHERE date(left(toString(s.date), 10)) >= date() - duration('P7D')
         MATCH (s)-[:BY]->(author:Person)
         RETURN s.topic AS topic, s.date AS date, author.name AS author,
                s.filePath AS filePath, s.id AS sessionId,
@@ -168,7 +168,7 @@ async def _all_handoffs(org: dict, me: str) -> dict:
     """Q7: All handoffs (7 days)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:HANDED_TO]->(target:Person)
-        WHERE date(s.date) >= date() - duration('P7D')
+        WHERE date(left(toString(s.date), 10)) >= date() - duration('P7D')
         MATCH (s)-[:BY]->(author:Person)
         RETURN s.topic AS topic, s.date AS date, author.name AS from,
                target.name AS to, s.filePath AS filePath
@@ -180,7 +180,7 @@ async def _checkins(org: dict) -> dict:
     """Q_checkins: Recent check-ins (7 days)."""
     return await execute_query(org, """
         MATCH (c:CheckIn)-[:BY]->(p:Person)
-        WHERE date(c.date) >= date() - duration('P7D')
+        WHERE date(left(toString(c.date), 10)) >= date() - duration('P7D')
         RETURN c.id AS id, c.summary AS summary, c.date AS date,
                p.name AS by, c.totalItems AS total
         ORDER BY c.date DESC LIMIT 5
@@ -210,10 +210,11 @@ async def _knowledge_gap(org: dict, me: str) -> dict:
     """Q_gap: Knowledge gap count — sessions without artifacts (14 days)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-        WHERE date(s.date) >= date() - duration('P14D')
+        WITH s, p, date(left(toString(s.date), 10)) AS sDate
+        WHERE sDate >= date() - duration('P14D')
         OPTIONAL MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p)
-        WHERE a.created >= datetime({year: s.date.year, month: s.date.month, day: s.date.day})
-          AND a.created < datetime({year: s.date.year, month: s.date.month, day: s.date.day}) + duration('P1D')
+        WHERE a.created >= datetime({year: sDate.year, month: sDate.month, day: sDate.day})
+          AND a.created < datetime({year: sDate.year, month: sDate.month, day: sDate.day}) + duration('P1D')
         WITH s, count(a) AS artifactCount WHERE artifactCount = 0
         RETURN count(s) AS gapCount
     """, {"me": me})
@@ -223,7 +224,7 @@ async def _orphans(org: dict) -> dict:
     """Q_orphans: Orphan artifact count (14 days)."""
     return await execute_query(org, """
         OPTIONAL MATCH (a:Artifact)
-        WHERE date(a.created) >= date() - duration('P14D')
+        WHERE date(left(toString(a.created), 10)) >= date() - duration('P14D')
           AND NOT (a)-[:PART_OF]->(:Quest)
         RETURN count(a) AS orphanCount
     """)
@@ -244,8 +245,9 @@ async def _cadence(org: dict, me: str) -> dict:
     """AM_cadence: My session count per week (4 weeks)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-        WHERE date(s.date) >= date() - duration('P28D')
-        WITH duration.inDays(date(s.date), date()).days / 7 AS weeksAgo,
+        WITH s, date(left(toString(s.date), 10)) AS sDate
+        WHERE sDate >= date() - duration('P28D')
+        WITH duration.inDays(sDate, date()).days / 7 AS weeksAgo,
              count(s) AS sessions
         RETURN weeksAgo, sessions ORDER BY weeksAgo
     """, {"me": me})
@@ -255,9 +257,10 @@ async def _resolution(org: dict, me: str) -> dict:
     """AM_resolution: My handoff resolution stats (30d avg)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:HANDED_TO]->(p:Person {name: $me})
-        WHERE s.handoffStatus = 'done' AND date(s.date) >= date() - duration('P30D')
+        WHERE s.handoffStatus = 'done'
+          AND date(left(toString(s.date), 10)) >= date() - duration('P30D')
           AND s.handoffReadDate IS NOT NULL
-        WITH duration.inDays(date(s.date), date(s.handoffReadDate)).days AS days
+        WITH duration.inDays(date(left(toString(s.date), 10)), date(left(toString(s.handoffReadDate), 10))).days AS days
         RETURN avg(days) AS avgDays, count(*) AS resolved
     """, {"me": me})
 
@@ -278,10 +281,11 @@ async def _capture(org: dict, me: str) -> dict:
     """AM_capture: My knowledge capture ratio (28d)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-        WHERE date(s.date) >= date() - duration('P28D')
+        WITH s, p, date(left(toString(s.date), 10)) AS sDate
+        WHERE sDate >= date() - duration('P28D')
         OPTIONAL MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p)
-        WHERE a.created >= datetime({year: s.date.year, month: s.date.month, day: s.date.day})
-          AND a.created < datetime({year: s.date.year, month: s.date.month, day: s.date.day}) + duration('P1D')
+        WHERE a.created >= datetime({year: sDate.year, month: sDate.month, day: sDate.day})
+          AND a.created < datetime({year: sDate.year, month: sDate.month, day: sDate.day}) + duration('P1D')
         WITH s, count(a) AS artifacts
         RETURN count(s) AS total,
                count(CASE WHEN artifacts > 0 THEN 1 END) AS captured

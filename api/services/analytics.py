@@ -13,9 +13,10 @@ async def _cadence(org: dict) -> dict:
     """AM1: Session cadence per person (4 weeks)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person)
-        WHERE date(s.date) >= date() - duration('P28D')
+        WITH s, p, date(left(toString(s.date), 10)) AS sDate
+        WHERE sDate >= date() - duration('P28D')
         WITH p.name AS person,
-             duration.inDays(date(s.date), date()).days / 7 AS weeksAgo,
+             duration.inDays(sDate, date()).days / 7 AS weeksAgo,
              count(s) AS sessions
         RETURN person, weeksAgo, sessions
         ORDER BY person, weeksAgo
@@ -26,10 +27,11 @@ async def _resolution(org: dict) -> dict:
     """AM2: Handoff resolution time distribution."""
     return await execute_query(org, """
         MATCH (s:Session)-[:HANDED_TO]->(p:Person)
-        WHERE s.handoffStatus = 'done' AND date(s.date) >= date() - duration('P30D')
+        WHERE s.handoffStatus = 'done'
+          AND date(left(toString(s.date), 10)) >= date() - duration('P30D')
           AND s.handoffReadDate IS NOT NULL
         WITH p.name AS recipient,
-             duration.inDays(date(s.date), date(s.handoffReadDate)).days AS resolutionDays
+             duration.inDays(date(left(toString(s.date), 10)), date(left(toString(s.handoffReadDate), 10))).days AS resolutionDays
         RETURN recipient,
                avg(resolutionDays) AS avgDays,
                min(resolutionDays) AS minDays,
@@ -47,7 +49,7 @@ async def _quest_velocity(org: dict) -> dict:
         WHERE a.created >= datetime() - duration('P28D')
         WITH q.id AS quest, q.title AS title,
              CASE WHEN a IS NOT NULL
-               THEN duration.inDays(date(a.created), date()).days / 7
+               THEN duration.inDays(date(left(toString(a.created), 10)), date()).days / 7
                ELSE null END AS weeksAgo,
              count(a) AS artifacts
         RETURN quest, title, weeksAgo, artifacts
@@ -90,10 +92,10 @@ async def _todo_throughput(org: dict) -> dict:
               (t.status = 'done' AND t.lastTransitionDate >= datetime() - duration('P28D'))
         WITH p.name AS person,
              CASE WHEN t.created >= datetime() - duration('P28D')
-               THEN duration.inDays(date(t.created), date()).days / 7
+               THEN duration.inDays(date(left(toString(t.created), 10)), date()).days / 7
                ELSE null END AS createdWeek,
              CASE WHEN t.status = 'done' AND t.lastTransitionDate >= datetime() - duration('P28D')
-               THEN duration.inDays(date(t.lastTransitionDate), date()).days / 7
+               THEN duration.inDays(date(left(toString(t.lastTransitionDate), 10)), date()).days / 7
                ELSE null END AS doneWeek
         RETURN person,
                createdWeek, count(CASE WHEN createdWeek IS NOT NULL THEN 1 END) AS created,
@@ -106,10 +108,11 @@ async def _capture_ratio(org: dict) -> dict:
     """AM7: Knowledge capture ratio — sessions with same-day artifacts / total (28d)."""
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person)
-        WHERE date(s.date) >= date() - duration('P28D')
+        WITH s, p, date(left(toString(s.date), 10)) AS sDate
+        WHERE sDate >= date() - duration('P28D')
         OPTIONAL MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p)
-        WHERE a.created >= datetime({year: s.date.year, month: s.date.month, day: s.date.day})
-          AND a.created < datetime({year: s.date.year, month: s.date.month, day: s.date.day}) + duration('P1D')
+        WHERE a.created >= datetime({year: sDate.year, month: sDate.month, day: sDate.day})
+          AND a.created < datetime({year: sDate.year, month: sDate.month, day: sDate.day}) + duration('P1D')
         WITH p.name AS person, s, count(a) AS artifactCount
         WITH person,
              count(s) AS totalSessions,
@@ -129,7 +132,7 @@ async def _question_response(org: dict) -> dict:
         WHERE qs.created >= datetime() - duration('P30D')
         WITH p.name AS person,
              count(qs) AS answered,
-             avg(duration.inDays(date(qs.created), date()).days) AS avgResponseDays
+             avg(duration.inDays(date(left(toString(qs.created), 10)), date()).days) AS avgResponseDays
         RETURN person, answered, avgResponseDays
         ORDER BY person
     """)
@@ -139,7 +142,7 @@ async def _checkin_frequency(org: dict) -> dict:
     """AM9: Check-in frequency — check-ins per person with totals."""
     return await execute_query(org, """
         MATCH (c:CheckIn)-[:BY]->(p:Person)
-        WHERE date(c.date) >= date() - duration('P28D')
+        WHERE date(left(toString(c.date), 10)) >= date() - duration('P28D')
         RETURN p.name AS person, count(c) AS checkIns,
                sum(c.totalItems) AS totalReviewed
         ORDER BY person
