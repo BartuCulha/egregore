@@ -2142,6 +2142,10 @@ async def admin_dashboard(admin_user: str = Depends(validate_admin_github_token)
             "created_at": org_row.get("created_at"),
             "created_by": org_row.get("created_by"),
             "member_count": len(active_members),
+            "members": [
+                m["users"].get("github_username", "")
+                for m in active_members if m.get("users")
+            ],
             "last_activity": last_activity_by_org.get(slug),
             "telegram_connected": bool(org_row.get("telegram_chat_id")),
             "telegram_group_title": org_row.get("telegram_group_title"),
@@ -2541,6 +2545,31 @@ async def admin_graph_query(
         raise HTTPException(status_code=503, detail=f"Query failed: {e}")
 
 
+@app.post("/api/admin/graph-write")
+async def admin_graph_write(
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Run a write Cypher query against the shared customer Neo4j database.
+
+    Body: {"statement": "MATCH (n) ...", "params": {}}
+    Admin-only. For cleanup and migration operations.
+    """
+    statement = body.get("statement", "")
+    if not statement:
+        raise HTTPException(status_code=400, detail="Missing 'statement' field")
+
+    seed_org = _get_seed_org()
+    if not seed_org:
+        raise HTTPException(status_code=503, detail="No Neo4j access available")
+
+    try:
+        result = await execute_system_query(seed_org, statement, body.get("params", {}))
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Query failed: {e}")
+
+
 @app.post("/api/admin/org/{old_slug}/rename")
 async def admin_rename_org(
     old_slug: str,
@@ -2572,36 +2601,61 @@ async def admin_rename_org(
     existing_new = sb.get_org_by_slug(new_slug)
 
     steps = []
+    get_client = sb.get_client
 
-    # Step 1: Update Supabase orgs table
-    try:
-        if existing_new:
-            # Ghost org exists at new_slug — delete it first, then rename old → new
-            get_client = sb.get_client
-            # Delete ghost memberships
+    # Step 1: Clean up ghost org at new_slug if it exists
+    if existing_new:
+        try:
             get_client().table("memberships").delete().eq("org_slug", new_slug).execute()
-            # Delete ghost api_keys
             get_client().table("api_keys").delete().eq("org_slug", new_slug).execute()
-            # Delete ghost telemetry
             get_client().table("telemetry_events").delete().eq("org_slug", new_slug).execute()
-            # Delete ghost org row
+            get_client().table("telegram_events").delete().eq("org_slug", new_slug).execute()
             get_client().table("orgs").delete().eq("slug", new_slug).execute()
             steps.append(f"Deleted ghost org '{new_slug}' from Supabase")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Failed to clean up ghost org: {e}")
 
-        # Rename org row
-        sb.get_client().table("orgs").update({"slug": new_slug}).eq("slug", old_slug).execute()
-        steps.append(f"Renamed orgs.slug: {old_slug} → {new_slug}")
+    # Step 2: Null out unique fields on old row, then create new row with those values
+    try:
+        # Clear unique-constrained fields on old row first
+        get_client().table("orgs").update({
+            "telegram_chat_id": None,
+            "telegram_group_title": None,
+            "telegram_group_username": None,
+        }).eq("slug", old_slug).execute()
+
+        new_org_data = {
+            "slug": new_slug,
+            "name": old_org.get("name", ""),
+            "github_org": old_org.get("github_org", ""),
+            "neo4j_host": old_org.get("neo4j_host", ""),
+            "neo4j_user": old_org.get("neo4j_user", "neo4j"),
+            "neo4j_password": old_org.get("neo4j_password", ""),
+            "created_by": old_org.get("created_by"),
+            "telegram_chat_id": old_org.get("telegram_chat_id"),
+            "telegram_group_title": old_org.get("telegram_group_title"),
+            "telegram_group_username": old_org.get("telegram_group_username"),
+            "transcript_sharing": old_org.get("transcript_sharing", False),
+        }
+        get_client().table("orgs").insert(new_org_data).execute()
+        steps.append(f"Created new org row: {new_slug}")
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Supabase orgs rename failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to create new org row: {e}")
 
-    # Step 2: Update all FK references in Supabase
-    get_client = sb.get_client
+    # Step 3: Migrate all FK references from old_slug → new_slug
     for table in ("api_keys", "memberships", "telemetry_events", "telegram_events"):
         try:
             get_client().table(table).update({"org_slug": new_slug}).eq("org_slug", old_slug).execute()
-            steps.append(f"Updated {table}.org_slug → {new_slug}")
+            steps.append(f"Migrated {table}: {old_slug} → {new_slug}")
         except Exception as e:
-            steps.append(f"Warning: {table} update failed: {e}")
+            steps.append(f"Warning: {table} migration failed: {e}")
+
+    # Step 4: Delete old org row (now safe — no FK references left)
+    try:
+        get_client().table("orgs").delete().eq("slug", old_slug).execute()
+        steps.append(f"Deleted old org row: {old_slug}")
+    except Exception as e:
+        steps.append(f"Warning: old org row deletion failed: {e}")
 
     # Step 3: Regenerate API key with new slug prefix
     try:
