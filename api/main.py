@@ -1140,17 +1140,27 @@ async def github_client_id():
 async def _get_org_api_key(org_config: dict, slug: str) -> str:
     """Retrieve the org's plaintext API key.
 
-    Priority: in-memory ORG_CONFIGS → Neo4j Org node.
-    Supabase only stores hashes, so when the API restarts and reloads from
-    Supabase, the plaintext key is lost. The Neo4j Org node still has it
-    (written during /api/org/setup). Fall back to that.
+    Priority: in-memory → Supabase key_plaintext → Neo4j Org node (legacy).
     """
     # 1. Check in-memory config
     key = org_config.get("api_key", "")
     if key:
         return key
 
-    # 2. Retrieve from Neo4j Org node (stores plaintext from setup)
+    # 2. Read plaintext from Supabase (primary persistent store)
+    if USE_SUPABASE:
+        try:
+            from .services.supabase import get_active_api_key_plaintext
+            key = get_active_api_key_plaintext(slug)
+            if key:
+                org_config["api_key"] = key
+                if slug in ORG_CONFIGS:
+                    ORG_CONFIGS[slug]["api_key"] = key
+                return key
+        except Exception as e:
+            logger.warning(f"Failed to retrieve API key from Supabase for {slug}: {e}")
+
+    # 3. Fallback: Neo4j Org node (legacy, for keys created before Supabase plaintext storage)
     try:
         result = await execute_system_query(org_config, """
             MATCH (o:Org {id: $slug})
@@ -1159,7 +1169,6 @@ async def _get_org_api_key(org_config: dict, slug: str) -> str:
         values = result.get("values", [])
         if values and values[0] and values[0][0]:
             key = values[0][0]
-            # Cache in memory so subsequent calls don't hit Neo4j
             org_config["api_key"] = key
             if slug in ORG_CONFIGS:
                 ORG_CONFIGS[slug]["api_key"] = key
@@ -2432,6 +2441,72 @@ async def admin_rotate_key(slug: str, admin_user: str = Depends(validate_admin_g
         "slug": slug,
         "key_prefix": new_key[:20] + "...",
         "detail": "New key generated. Old key revoked. Written to Supabase + Neo4j + memory.",
+    }
+
+
+@app.post("/api/admin/backfill-keys")
+async def admin_backfill_keys(admin_user: str = Depends(validate_admin_github_token)):
+    """Backfill key_plaintext in Supabase from Neo4j Org nodes.
+
+    For existing orgs where Supabase only has the hash. Reads plaintext from
+    Neo4j and writes it to the key_plaintext column in Supabase.
+    """
+    from .services import supabase as sb
+
+    seed_org = _get_seed_org()
+    if not seed_org:
+        raise HTTPException(status_code=503, detail="No Neo4j access available")
+
+    # Get all Org nodes with api_keys from Neo4j
+    result = await execute_system_query(seed_org, """
+        MATCH (o:Org)
+        WHERE o.api_key IS NOT NULL
+        RETURN o.id AS slug, o.api_key AS api_key
+    """)
+
+    backfilled = []
+    skipped = []
+    failed = []
+
+    for row in result.get("values", []):
+        if not row or not row[0] or not row[1]:
+            continue
+        slug, neo4j_key = row[0], row[1]
+
+        # Check if Supabase already has plaintext for this org
+        existing = sb.get_active_api_key_plaintext(slug)
+        if existing:
+            skipped.append(slug)
+            continue
+
+        # Write plaintext to Supabase (update existing active key row)
+        try:
+            prefix = neo4j_key[:20] if len(neo4j_key) > 20 else neo4j_key
+            # Find the active key row and update it
+            get_client = sb.get_client
+            update_result = (
+                get_client()
+                .table("api_keys")
+                .update({"key_plaintext": neo4j_key})
+                .eq("org_slug", slug)
+                .eq("is_active", True)
+                .execute()
+            )
+            if update_result.data:
+                backfilled.append(slug)
+                # Also update in-memory
+                if slug in ORG_CONFIGS:
+                    ORG_CONFIGS[slug]["api_key"] = neo4j_key
+            else:
+                failed.append({"slug": slug, "reason": "no active key row in Supabase"})
+        except Exception as e:
+            failed.append({"slug": slug, "reason": str(e)})
+
+    return {
+        "status": "ok",
+        "backfilled": backfilled,
+        "skipped": skipped,
+        "failed": failed,
     }
 
 
