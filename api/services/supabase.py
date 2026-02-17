@@ -301,7 +301,7 @@ def get_memberships(org_slug: str) -> list[dict]:
     result = (
         get_client()
         .table("memberships")
-        .select("*, users(github_username, github_name, avatar_url, telegram_username)")
+        .select("*, users!memberships_user_id_fkey(github_username, github_name, avatar_url, telegram_username)")
         .eq("org_slug", org_slug)
         .execute()
     )
@@ -507,7 +507,7 @@ def get_all_memberships() -> list[dict]:
     result = (
         get_client()
         .table("memberships")
-        .select("*, users(github_username, github_name, avatar_url, telegram_username)")
+        .select("*, users!memberships_user_id_fkey(github_username, github_name, avatar_url, telegram_username)")
         .execute()
     )
     return result.data or []
