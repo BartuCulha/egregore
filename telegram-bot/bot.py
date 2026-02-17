@@ -539,6 +539,29 @@ def auto_register_telegram_id(telegram_id: int, first_name: str = None, username
     return None
 
 
+async def _sync_telegram_user_to_supabase(api_key: str, identifier: str, first_name: str, username: str, telegram_id: int):
+    """Ensure Telegram user exists in Supabase as a member. Best-effort."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{EGREGORE_API_URL}/api/user/ensure",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "github_username": identifier,
+                    "github_name": first_name or identifier,
+                    "telegram_username": username or None,
+                    "telegram_id": telegram_id,
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Supabase sync OK: {identifier} (tg:{username})")
+            else:
+                logger.warning(f"Supabase sync failed for {identifier}: {resp.status_code} {resp.text}")
+    except Exception as e:
+        logger.warning(f"Supabase sync error for {identifier}: {e}")
+
+
 def track_telegram_membership(telegram_id: int, username: str, first_name: str, org_slug: str, action: str = "join"):
     """Track Telegram group membership via TelegramUser nodes.
 
@@ -600,6 +623,19 @@ def track_telegram_membership(telegram_id: int, username: str, first_name: str, 
             )
 
         logger.info(f"Tracked join: TelegramUser {telegram_id} ({first_name}) → org {org_slug}")
+
+        # Sync to Supabase — ensure user + membership exist
+        if EGREGORE_API_URL and org_config:
+            try:
+                api_key = org_config.get("api_key", "")
+                identifier = username or first_name or str(telegram_id)
+                import asyncio
+                loop = asyncio.get_event_loop()
+                loop.create_task(_sync_telegram_user_to_supabase(
+                    api_key, identifier, first_name, username, telegram_id
+                ))
+            except Exception as se:
+                logger.warning(f"Supabase sync failed for {first_name}: {se}")
     except Exception as e:
         logger.error(f"Failed to track membership: {e}")
 
