@@ -1985,10 +1985,22 @@ async def admin_dashboard(admin_user: str = Depends(validate_admin_github_token)
 
     from .services import supabase as sb
 
-    orgs = sb.list_orgs()
-    all_memberships = sb.get_all_memberships()
-    all_keys = sb.list_api_keys()
-    recent_telemetry = sb.get_telemetry_events(limit=500)
+    try:
+        orgs = sb.list_orgs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_orgs failed: {e}")
+    try:
+        all_memberships = sb.get_all_memberships()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_all_memberships failed: {e}")
+    try:
+        all_keys = sb.list_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_api_keys failed: {e}")
+    try:
+        recent_telemetry = sb.get_telemetry_events(limit=500)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_telemetry_events failed: {e}")
 
     # Index memberships by org
     memberships_by_org = {}
@@ -2156,11 +2168,20 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
     if not org_row:
         raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
 
-    members = sb.get_memberships(slug)
-    telemetry = sb.get_telemetry_events(org_slug=slug, limit=50)
+    try:
+        members = sb.get_memberships(slug)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_memberships failed: {e}")
+    try:
+        telemetry = sb.get_telemetry_events(org_slug=slug, limit=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_telemetry_events failed: {e}")
 
     # API keys (prefix only)
-    all_keys = sb.list_api_keys()
+    try:
+        all_keys = sb.list_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list_api_keys failed: {e}")
     org_keys = [
         {"key_prefix": k["key_prefix"], "is_active": k["is_active"], "created_at": k.get("created_at")}
         for k in all_keys
