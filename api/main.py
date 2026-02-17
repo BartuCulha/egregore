@@ -161,6 +161,8 @@ async def user_ensure(body: UserEnsure, org: dict = Depends(validate_api_key)):
         user = upsert_user(
             github_username=body.github_username,
             github_name=body.github_name,
+            telegram_username=body.telegram_username,
+            telegram_id=body.telegram_id,
         )
         membership = add_membership(
             org_slug=org["slug"],

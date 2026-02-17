@@ -102,6 +102,8 @@ class UserEnsure(BaseModel):
     """Ensure a user + membership exist in Supabase."""
     github_username: str
     github_name: Optional[str] = None
+    telegram_username: Optional[str] = None
+    telegram_id: Optional[int] = None
 
 
 class UserProfileUpdate(BaseModel):
