@@ -25,7 +25,7 @@ fi
 # Config
 SOURCE_REPO="Curve-Labs/egregore"
 TARGET_REPO="Curve-Labs/egregore-site"
-SOURCE_DIR="site"
+SOURCE_DIR="site 2"
 SOURCE_BRANCH="main"
 DRY_RUN=false
 
