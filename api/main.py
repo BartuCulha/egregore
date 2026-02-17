@@ -355,13 +355,15 @@ async def org_register(body: OrgRegister, authorization: str = Header(...)):
 
     ORG_CONFIGS[slug] = new_org
 
-    # Create Org node in Neo4j (keep for knowledge graph)
+    # Create Org node in Neo4j (keep for knowledge graph — include api_key for fallback retrieval)
     try:
         await execute_query(new_org, """
             MERGE (o:Org {id: $_org})
-            SET o.name = $name, o.github_org = $github_org, o.created_by = $created_by
+            SET o.name = $name, o.github_org = $github_org, o.created_by = $created_by,
+                o.api_key = $api_key
             RETURN o.id
-        """, {"name": body.org_name, "github_org": body.github_org, "created_by": github_user.get("login", "")})
+        """, {"name": body.org_name, "github_org": body.github_org,
+              "created_by": github_user.get("login", ""), "api_key": api_key})
     except Exception as e:
         logger.warning(f"Neo4j Org node creation failed (non-fatal with Supabase): {e}")
 
@@ -2354,6 +2356,82 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
         "neo4j_org_node": neo4j_org_node_info,
         "isolation": isolation,
         "health": health,
+    }
+
+
+@app.post("/api/admin/org/{slug}/fix-key")
+async def admin_fix_key(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Backfill api_key on Neo4j Org node from in-memory config.
+
+    For orgs created via /register (which didn't write the key to Neo4j),
+    this copies the plaintext key from ORG_CONFIGS to the Org node.
+    """
+    org_config = ORG_CONFIGS.get(slug)
+    if not org_config:
+        raise HTTPException(status_code=404, detail=f"Org not found in config: {slug}")
+
+    api_key = org_config.get("api_key", "")
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No plaintext key in memory for {slug}. API may have restarted since creation. "
+                   "Use /api/admin/org/{slug}/rotate-key to generate a new one.",
+        )
+
+    try:
+        result = await execute_system_query(org_config, """
+            MATCH (o:Org {id: $slug})
+            SET o.api_key = $api_key
+            RETURN o.id AS slug
+        """, {"slug": slug, "api_key": api_key})
+        vals = result.get("values", [])
+        if not vals or not vals[0]:
+            return {"status": "warning", "detail": f"Org node not found for {slug}. Key not written."}
+        return {"status": "ok", "detail": f"api_key written to Neo4j Org node for {slug}"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Neo4j write failed: {e}")
+
+
+@app.post("/api/admin/org/{slug}/rotate-key")
+async def admin_rotate_key(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Generate a new API key for an org. Revokes old key, writes to Supabase + Neo4j + memory.
+
+    Use when: plaintext key is lost (API restarted, Neo4j Org node missing key).
+    """
+    org_config = ORG_CONFIGS.get(slug)
+    if not org_config:
+        raise HTTPException(status_code=404, detail=f"Org not found in config: {slug}")
+
+    from .services import supabase as sb
+
+    # Generate new key
+    new_key = generate_api_key(slug)
+
+    # Revoke old keys in Supabase
+    sb.revoke_api_key(slug)
+
+    # Store new key hash in Supabase
+    sb.create_api_key(slug, new_key)
+
+    # Write plaintext to Neo4j Org node
+    try:
+        await execute_system_query(org_config, """
+            MATCH (o:Org {id: $slug})
+            SET o.api_key = $api_key
+            RETURN o.id
+        """, {"slug": slug, "api_key": new_key})
+    except Exception as e:
+        logger.warning(f"rotate-key: Neo4j write failed for {slug}: {e}")
+
+    # Update in-memory config
+    org_config["api_key"] = new_key
+    ORG_CONFIGS[slug]["api_key"] = new_key
+
+    return {
+        "status": "ok",
+        "slug": slug,
+        "key_prefix": new_key[:20] + "...",
+        "detail": "New key generated. Old key revoked. Written to Supabase + Neo4j + memory.",
     }
 
 
