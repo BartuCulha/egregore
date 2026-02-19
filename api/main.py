@@ -19,7 +19,8 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Query, File, Form, 
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import (
-    validate_api_key, validate_admin_github_token, generate_api_key,
+    validate_api_key, validate_admin_github_token, validate_github_token,
+    generate_api_key,
     reload_configs, ORG_CONFIGS,
     load_orgs_from_neo4j, load_orgs, exchange_github_code, GITHUB_CLIENT_ID,
     USE_SUPABASE,
@@ -28,7 +29,7 @@ from .models import (
     GraphQuery, GraphBatch, NotifySend, NotifyGroup, OrgRegister,
     OrgSetup, OrgJoin, OrgTelegram, GitHubCallback, SetupOrgsResponse,
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
-    WaitlistAdd, WaitlistApprove,
+    WaitlistAdd, WaitlistApprove, HealthCheckin,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -2014,6 +2015,44 @@ async def telemetry_ingest(request: Request, org: dict = Depends(validate_api_ke
 
 
 # =============================================================================
+# HEALTH CHECK-IN
+# =============================================================================
+
+
+@app.post("/api/health/checkin")
+async def health_checkin(body: HealthCheckin, github_username: str = Depends(validate_github_token)):
+    """Record a health check-in from a client session at startup.
+
+    Auth: GitHub token (NOT API key — broken keys are the #1 problem).
+    Called by bin/startup-check.sh in the background at session start.
+    """
+    if not USE_SUPABASE:
+        return {"status": "skipped", "reason": "supabase disabled"}
+
+    from .services.supabase import insert_health_checkin
+
+    try:
+        row = insert_health_checkin(
+            github_username=github_username,
+            org_slug=body.org_slug,
+            key_valid=body.key_valid,
+            key_slug=body.key_slug,
+            config_slug=body.config_slug,
+            framework_version=body.framework_version,
+            memory_linked=body.memory_linked,
+            git_synced=body.git_synced,
+            branch=body.branch,
+            errors=body.errors,
+            platform=body.platform,
+            shell=body.shell,
+        )
+        return {"status": "ok", "id": row.get("id")}
+    except Exception as e:
+        logger.warning(f"Health check-in failed for {github_username}: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+# =============================================================================
 # ADMIN DASHBOARD
 # =============================================================================
 
@@ -2837,6 +2876,232 @@ async def admin_telemetry(
             "by_type": by_type,
             "by_org": by_org,
         },
+    }
+
+
+# =============================================================================
+# USER DASHBOARD (any authenticated GitHub user)
+# =============================================================================
+
+
+@app.get("/api/me/egregores")
+async def me_egregores(github_username: str = Depends(validate_github_token)):
+    """User dashboard: return ONLY the authenticated user's orgs with full detail.
+
+    Includes: slug, name, role, API key (full + masked), member list,
+    latest health check-in, and health diagnostics (key mismatch → fix command).
+
+    Scoping enforced at API level: queries memberships by authenticated user's user_id.
+    No parameter the user can manipulate to see other orgs.
+    """
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Dashboard requires Supabase")
+
+    from .services import supabase as sb
+
+    # Get user's memberships (scoped by user_id)
+    memberships = sb.get_user_orgs(github_username)
+    if not memberships:
+        return {"github_username": github_username, "egregores": []}
+
+    # Get user's health check-ins
+    health_checkins = sb.get_user_health_checkins(github_username, limit=20)
+
+    # Index check-ins by org (latest per org)
+    latest_checkin_by_org = {}
+    for c in health_checkins:
+        org = c.get("org_slug", "")
+        if org not in latest_checkin_by_org:
+            latest_checkin_by_org[org] = c
+
+    egregores = []
+    for m in memberships:
+        org_data = m.get("orgs")
+        if not org_data:
+            continue
+
+        slug = org_data["slug"]
+        role = m.get("role", "member")
+
+        # Get API key for this org (full plaintext for the user)
+        api_key = sb.get_active_api_key_plaintext(slug) or ""
+        masked_key = ""
+        if api_key:
+            # ek_slug_abc123... → ek_slug_abc1****
+            parts = api_key.split("_")
+            if len(parts) >= 3:
+                secret = parts[2]
+                masked_key = f"ek_{parts[1]}_{secret[:4]}{'*' * (len(secret) - 4)}"
+            else:
+                masked_key = api_key[:8] + "****"
+
+        # Get members for this org
+        org_members = sb.get_memberships(slug)
+        members_list = [
+            {
+                "github_username": mem["users"]["github_username"] if mem.get("users") else None,
+                "github_name": mem["users"]["github_name"] if mem.get("users") else None,
+                "role": mem.get("role", "member"),
+                "status": mem.get("status", "active"),
+            }
+            for mem in org_members
+            if mem.get("users")
+        ]
+
+        # Latest health check-in for this org
+        checkin = latest_checkin_by_org.get(slug)
+
+        # Health diagnostics
+        diagnostics = []
+        if checkin:
+            if checkin.get("key_valid") is False:
+                key_slug = checkin.get("key_slug", "")
+                config_slug = checkin.get("config_slug", "")
+                fix_cmd = f'sed -i.bak "s/^EGREGORE_API_KEY=.*/EGREGORE_API_KEY=<correct-key>/" .env'
+                diagnostics.append({
+                    "type": "key_mismatch",
+                    "severity": "critical",
+                    "detail": f"API key slug '{key_slug}' doesn't match config slug '{config_slug}'",
+                    "fix_command": fix_cmd,
+                    "correct_key": api_key,
+                })
+            if checkin.get("memory_linked") is False:
+                diagnostics.append({
+                    "type": "memory_not_linked",
+                    "severity": "warning",
+                    "detail": "Memory directory not symlinked",
+                })
+            if checkin.get("git_synced") is False:
+                diagnostics.append({
+                    "type": "git_behind",
+                    "severity": "warning",
+                    "detail": "Local branch is behind develop",
+                })
+            for err in (checkin.get("errors") or []):
+                if "key_slug_mismatch" in str(err):
+                    continue  # Already covered above
+                diagnostics.append({
+                    "type": "error",
+                    "severity": "warning",
+                    "detail": str(err),
+                })
+
+        egregores.append({
+            "slug": slug,
+            "name": org_data.get("name", slug),
+            "github_org": org_data.get("github_org", ""),
+            "role": role,
+            "api_key": api_key,
+            "api_key_masked": masked_key,
+            "has_telegram": bool(org_data.get("telegram_chat_id")),
+            "members": members_list,
+            "latest_checkin": checkin,
+            "diagnostics": diagnostics,
+        })
+
+    return {"github_username": github_username, "egregores": egregores}
+
+
+# =============================================================================
+# ADMIN: HEALTH OVERVIEW
+# =============================================================================
+
+
+@app.get("/api/admin/health")
+async def admin_health(
+    org_slug: str = Query(None),
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Admin health overview: all users' latest check-ins with computed alerts.
+
+    Returns: per-user latest check-in, plus aggregated alerts for:
+    - Stale check-ins (>24h)
+    - Broken keys (key_valid=false)
+    - Version mismatches
+    - Memory not linked
+    """
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Health dashboard requires Supabase")
+
+    from .services import supabase as sb
+
+    checkins = sb.get_latest_health_checkins(org_slug=org_slug, limit=500)
+
+    # Deduplicate: keep latest per (github_username, org_slug)
+    seen = {}
+    unique_checkins = []
+    for c in checkins:
+        key = (c.get("github_username", ""), c.get("org_slug", ""))
+        if key not in seen:
+            seen[key] = True
+            unique_checkins.append(c)
+
+    # Compute alerts
+    alerts = []
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+
+    for c in unique_checkins:
+        user = c.get("github_username", "unknown")
+        org = c.get("org_slug", "unknown")
+
+        # Stale check-in
+        checked_in = c.get("checked_in_at")
+        if checked_in:
+            try:
+                ts = datetime.fromisoformat(checked_in.replace("Z", "+00:00"))
+                if (now - ts) > timedelta(hours=24):
+                    alerts.append({
+                        "type": "stale_checkin",
+                        "severity": "warning",
+                        "user": user,
+                        "org": org,
+                        "detail": f"Last check-in {checked_in}",
+                    })
+            except (ValueError, TypeError):
+                pass
+
+        # Broken key
+        if c.get("key_valid") is False:
+            alerts.append({
+                "type": "broken_key",
+                "severity": "critical",
+                "user": user,
+                "org": org,
+                "detail": f"Key slug '{c.get('key_slug')}' != config slug '{c.get('config_slug')}'",
+            })
+
+        # Memory not linked
+        if c.get("memory_linked") is False:
+            alerts.append({
+                "type": "memory_not_linked",
+                "severity": "warning",
+                "user": user,
+                "org": org,
+                "detail": "Memory directory not symlinked",
+            })
+
+    # Version spread
+    versions = {}
+    for c in unique_checkins:
+        v = c.get("framework_version")
+        if v:
+            versions[v] = versions.get(v, 0) + 1
+    if len(versions) > 1:
+        for v, count in versions.items():
+            alerts.append({
+                "type": "version_mismatch",
+                "severity": "warning",
+                "user": "",
+                "org": "",
+                "detail": f"Framework version '{v}' used by {count} user(s)",
+            })
+
+    return {
+        "checkins": unique_checkins,
+        "alerts": alerts,
+        "total_users": len(seen),
+        "versions": versions,
     }
 
 
