@@ -2957,9 +2957,6 @@ async def me_egregores(github_username: str = Depends(validate_github_token)):
             or latest_checkin_by_org.get(github_org.lower().replace("-", ""))
             or latest_checkin_by_org.get(github_org.lower())
         )
-        # Last resort: user's most recent check-in (covers single-org users)
-        if not checkin and health_checkins:
-            checkin = health_checkins[0]
 
         # Health diagnostics
         diagnostics = []
