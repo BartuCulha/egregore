@@ -3046,6 +3046,17 @@ async def admin_health(
     if org_slug:
         all_memberships = [m for m in all_memberships if m.get("org_slug") == org_slug]
 
+    # Build org info lookup (for Telegram group names)
+    orgs_list = sb.list_orgs()
+    org_info = {}
+    for o in orgs_list:
+        org_info[o["slug"]] = {
+            "name": o.get("name", ""),
+            "github_org": o.get("github_org", ""),
+            "telegram_group_title": o.get("telegram_group_title") or "",
+            "telegram_chat_id": o.get("telegram_chat_id") or "",
+        }
+
     # Build combined list: checked-in users + not-checked-in members
     seen_users = set()
     combined = []
@@ -3157,6 +3168,12 @@ async def admin_health(
                 "detail": f"Framework version '{v}' used by {count} user(s)",
             })
 
+    # Enrich each row with org info (Telegram group, org name)
+    for c in combined:
+        info = org_info.get(c.get("org_slug", ""), {})
+        c["org_name"] = info.get("name", "")
+        c["telegram_group"] = info.get("telegram_group_title", "")
+
     # Sort: checked-in first, then not checked in
     combined.sort(key=lambda x: (not x.get("checked_in"), x.get("github_username", "")))
 
@@ -3165,6 +3182,7 @@ async def admin_health(
         "alerts": alerts,
         "total_users": len(seen_users),
         "versions": versions,
+        "org_info": org_info,
     }
 
 
