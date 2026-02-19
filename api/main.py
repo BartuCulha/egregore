@@ -3035,20 +3035,73 @@ async def admin_health(
     checkins = sb.get_latest_health_checkins(org_slug=org_slug, limit=500)
 
     # Deduplicate: keep latest per (github_username, org_slug)
-    seen = {}
-    unique_checkins = []
+    checkin_map = {}  # (username, org) → checkin
     for c in checkins:
         key = (c.get("github_username", ""), c.get("org_slug", ""))
-        if key not in seen:
-            seen[key] = True
-            unique_checkins.append(c)
+        if key not in checkin_map:
+            checkin_map[key] = c
 
-    # Compute alerts
+    # Get ALL memberships to show users who haven't checked in
+    all_memberships = sb.get_all_memberships()
+    if org_slug:
+        all_memberships = [m for m in all_memberships if m.get("org_slug") == org_slug]
+
+    # Build combined list: checked-in users + not-checked-in members
+    seen_users = set()
+    combined = []
+
+    # First: users with check-ins
+    for key, c in checkin_map.items():
+        seen_users.add(key)
+        combined.append({**c, "checked_in": True})
+
+    # Second: members without check-ins (also try github_org variant matching)
+    for m in all_memberships:
+        user_info = m.get("users") or {}
+        username = user_info.get("github_username", "")
+        m_org = m.get("org_slug", "")
+        if not username:
+            continue
+
+        key = (username, m_org)
+        if key in seen_users:
+            continue
+
+        # Check if they checked in under a different slug (egregore.json vs Supabase)
+        has_any_checkin = any(
+            k[0] == username for k in checkin_map
+        )
+        if has_any_checkin:
+            # Find their check-in under the other slug
+            for ck, cv in checkin_map.items():
+                if ck[0] == username and (username, m_org) not in seen_users:
+                    combined.append({**cv, "org_slug": m_org, "checked_in": True})
+                    seen_users.add(key)
+                    break
+        if key not in seen_users:
+            combined.append({
+                "github_username": username,
+                "org_slug": m_org,
+                "checked_in": False,
+                "checked_in_at": None,
+                "key_valid": None,
+                "memory_linked": None,
+                "git_synced": None,
+                "framework_version": None,
+                "branch": None,
+                "errors": [],
+                "role": m.get("role", "member"),
+            })
+            seen_users.add(key)
+
+    # Compute alerts (only for users who have checked in)
     alerts = []
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
 
-    for c in unique_checkins:
+    for c in combined:
+        if not c.get("checked_in"):
+            continue
         user = c.get("github_username", "unknown")
         org = c.get("org_slug", "unknown")
 
@@ -3090,7 +3143,7 @@ async def admin_health(
 
     # Version spread
     versions = {}
-    for c in unique_checkins:
+    for c in combined:
         v = c.get("framework_version")
         if v:
             versions[v] = versions.get(v, 0) + 1
@@ -3104,10 +3157,13 @@ async def admin_health(
                 "detail": f"Framework version '{v}' used by {count} user(s)",
             })
 
+    # Sort: checked-in first, then not checked in
+    combined.sort(key=lambda x: (not x.get("checked_in"), x.get("github_username", "")))
+
     return {
-        "checkins": unique_checkins,
+        "checkins": combined,
         "alerts": alerts,
-        "total_users": len(seen),
+        "total_users": len(seen_users),
         "versions": versions,
     }
 
