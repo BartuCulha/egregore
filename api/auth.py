@@ -419,6 +419,29 @@ async def validate_admin_github_token(authorization: str = Header(...)) -> str:
     return username
 
 
+async def validate_github_token(authorization: str = Header(...)) -> str:
+    """Validate GitHub token and return username. Any GitHub user, not admin-gated.
+
+    Explicitly rejects ek_ API keys — health check-ins use GitHub tokens
+    because broken API keys are the #1 problem we're diagnosing.
+    """
+    token = authorization.replace("Bearer ", "").strip()
+
+    if token.startswith("ek_"):
+        raise HTTPException(status_code=401, detail="GitHub token required, not API key")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=10.0,
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    return resp.json().get("login", "")
+
+
 async def exchange_github_code(code: str) -> str:
     """Exchange OAuth authorization code for access token."""
     if not GITHUB_CLIENT_SECRET:

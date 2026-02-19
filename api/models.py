@@ -125,3 +125,18 @@ class WaitlistAdd(BaseModel):
 class WaitlistApprove(BaseModel):
     """Approve a waitlist entry."""
     waitlist_id: int
+
+
+class HealthCheckin(BaseModel):
+    """Health check-in from a client session at startup."""
+    org_slug: str
+    key_valid: Optional[bool] = None
+    key_slug: Optional[str] = None
+    config_slug: Optional[str] = None
+    framework_version: Optional[str] = None
+    memory_linked: Optional[bool] = None
+    git_synced: Optional[bool] = None
+    branch: Optional[str] = None
+    errors: list[str] = []
+    platform: Optional[str] = None
+    shell: Optional[str] = None
