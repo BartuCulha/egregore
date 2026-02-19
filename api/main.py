@@ -719,9 +719,22 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
             detail="egregore.json is missing 'slug' field. Run setup again or add it manually.",
         )
     repos = config.get("repos", [])
-    # Person node creation deferred to first session start (avoids orphaned nodes)
     org_config = ORG_CONFIGS.get(slug)
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
+
+    # Register user + membership in Supabase immediately (don't defer to session-start)
+    if USE_SUPABASE:
+        try:
+            from .services.supabase import upsert_user, add_membership
+            upsert_user(
+                github_username=user["login"],
+                github_name=user.get("name"),
+                avatar_url=user.get("avatar_url"),
+            )
+            add_membership(slug, user["login"], role="member")
+            logger.info(f"Join: registered {user['login']} in Supabase for {slug}")
+        except Exception as e:
+            logger.warning(f"Join: Supabase registration failed for {user['login']}: {e}")
 
     # Generate Telegram group invite if configured
     telegram_group_link = None
@@ -1597,8 +1610,22 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     api_url = config.get("api_url", "")
     repos = config.get("repos", [])
 
-    # Person node creation deferred to first session start
     org_config = ORG_CONFIGS.get(slug)
+
+    # Register user + membership in Supabase immediately (don't defer to session-start)
+    if USE_SUPABASE:
+        try:
+            from .services.supabase import upsert_user, add_membership
+            upsert_user(
+                github_username=user["login"],
+                github_name=user.get("name"),
+                avatar_url=user.get("avatar_url"),
+            )
+            invited_by = invite_data.get("invited_by")
+            add_membership(slug, user["login"], role="member", invited_by_username=invited_by)
+            logger.info(f"Invite accept: registered {user['login']} in Supabase for {slug}")
+        except Exception as e:
+            logger.warning(f"Invite accept: Supabase registration failed for {user['login']}: {e}")
 
     # Consume the invite token now
     claim_token(invite_token)
