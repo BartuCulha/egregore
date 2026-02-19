@@ -671,18 +671,20 @@ if [ -n "$UPSTREAM_NEW" ]; then
   fi
 fi
 
-# --- One-time migration: fix 'claude start' → 'claude' in shell aliases ---
-# 'claude start' resumes the last session regardless of CWD, which breaks
-# multi-instance setups. Only needs to run once per user.
-if ! grep -q '"alias_fixed"' "$STATE_FILE" 2>/dev/null; then
+# --- One-time migration: fix aliases to use 'claude "start"' ---
+# v1: 'claude start' → 'claude' (cross-instance bug)
+# v2: 'claude' → 'claude "start"' (blank prompt — auto-sends first message)
+ALIAS_VERSION=$(jq -r '.alias_version // 0' "$STATE_FILE" 2>/dev/null || echo "0")
+if [ "$ALIAS_VERSION" -lt 2 ] 2>/dev/null; then
   for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
-    if [ -f "$profile" ] && grep -q 'claude start' "$profile" 2>/dev/null; then
-      sed -i.bak 's/&& claude start/\&\& claude/g' "$profile" 2>/dev/null && rm -f "${profile}.bak" || true
+    if [ -f "$profile" ] && grep -q "$SCRIPT_DIR" "$profile" 2>/dev/null; then
+      # Replace any egregore alias pointing to this directory with the correct command
+      # Handles: && claude start, && claude, && claude "start" (idempotent)
+      sed -i.bak "s|&& claude start|\\&\\& claude \"start\"|g; s|&& claude'|\\&\\& claude \"start\"'|g" "$profile" 2>/dev/null && rm -f "${profile}.bak" || true
     fi
   done
-  # Mark as done so we don't re-run
   if [ -f "$STATE_FILE" ] && jq . "$STATE_FILE" >/dev/null 2>&1; then
-    jq '. + {"alias_fixed": true}' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    jq '. + {"alias_fixed": true, "alias_version": 2}' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
   fi
 fi
 
@@ -733,6 +735,9 @@ fi
 # --- Emit session_start telemetry (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/telemetry.sh" emit "session_start" \
   "$(jq -n --arg branch "$BRANCH" '{branch: $branch}')" 2>/dev/null &
+
+# --- Health check-in (background, non-blocking) ---
+bash "$SCRIPT_DIR/bin/startup-check.sh" >/dev/null 2>&1 &
 
 # Clean up temp files
 rm -rf "$CTX_DIR"

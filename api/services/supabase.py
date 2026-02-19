@@ -557,6 +557,85 @@ def get_telemetry_events(
     return result.data or []
 
 
+# =============================================================================
+# HEALTH CHECK-IN OPERATIONS
+# =============================================================================
+
+
+def insert_health_checkin(
+    github_username: str,
+    org_slug: str,
+    key_valid: Optional[bool] = None,
+    key_slug: Optional[str] = None,
+    config_slug: Optional[str] = None,
+    framework_version: Optional[str] = None,
+    memory_linked: Optional[bool] = None,
+    git_synced: Optional[bool] = None,
+    branch: Optional[str] = None,
+    errors: Optional[list] = None,
+    platform: Optional[str] = None,
+    shell: Optional[str] = None,
+) -> dict:
+    """Insert a health check-in row. Called at session startup."""
+    data = {
+        "github_username": github_username,
+        "org_slug": org_slug,
+    }
+    if key_valid is not None:
+        data["key_valid"] = key_valid
+    if key_slug is not None:
+        data["key_slug"] = key_slug
+    if config_slug is not None:
+        data["config_slug"] = config_slug
+    if framework_version is not None:
+        data["framework_version"] = framework_version
+    if memory_linked is not None:
+        data["memory_linked"] = memory_linked
+    if git_synced is not None:
+        data["git_synced"] = git_synced
+    if branch is not None:
+        data["branch"] = branch
+    if errors is not None:
+        data["errors"] = errors
+    if platform is not None:
+        data["platform"] = platform
+    if shell is not None:
+        data["shell"] = shell
+
+    result = get_client().table("health_checkins").insert(data).execute()
+    return result.data[0] if result.data else data
+
+
+def get_latest_health_checkins(org_slug: Optional[str] = None, limit: int = 100) -> list[dict]:
+    """Get latest health check-ins, optionally filtered by org. One per user (latest)."""
+    # Get recent check-ins ordered by time
+    query = (
+        get_client()
+        .table("health_checkins")
+        .select("*")
+        .order("checked_in_at", desc=True)
+        .limit(min(limit, 500))
+    )
+    if org_slug:
+        query = query.eq("org_slug", org_slug)
+    result = query.execute()
+    return result.data or []
+
+
+def get_user_health_checkins(github_username: str, limit: int = 10) -> list[dict]:
+    """Get recent health check-ins for a specific user."""
+    result = (
+        get_client()
+        .table("health_checkins")
+        .select("*")
+        .eq("github_username", github_username)
+        .order("checked_in_at", desc=True)
+        .limit(min(limit, 50))
+        .execute()
+    )
+    return result.data or []
+
+
 def load_all_org_configs() -> dict:
     """Load all org configs from Supabase into a dict keyed by slug.
 
