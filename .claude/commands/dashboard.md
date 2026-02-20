@@ -1,4 +1,6 @@
-Personal dashboard. Display it immediately — no preamble, no narration, no reasoning text. Output the box and nothing else before AskUserQuestion.
+See your recent sessions, open handoffs, and current work at a glance.
+
+Display it immediately — no preamble, no narration, no reasoning text. Output the box and nothing else before AskUserQuestion.
 
 ## When to invoke
 
