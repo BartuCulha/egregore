@@ -95,7 +95,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit. Relationships: BY, CONTRIBUTED_BY, HANDED_TO, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
 
 ## Notifications
 
@@ -431,7 +431,7 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 When a user describes intent that maps to a command, invoke it — don't wait for them to type the slash. Each command file has a `## When to invoke` section with trigger phrases and disambiguation. Load the command to get the full spec.
 
 **Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
-**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting`
+**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Reading** — `/open` (open/read/show me/display/pull up a file — always verbatim, never summarize)
 **Coordination** — `/ask` `/quest` `/issue` `/invite`
 **Git** — `/branch` `/commit` `/push` `/pr` `/save`
@@ -444,6 +444,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Things to do: `/todo` (personal task) vs `/quest` (team exploration) vs `/issue` (something broken)
 - Questions: `/ask [person]` (async to teammate) vs just asking (agent can answer from context)
 - Reading files: `/open` (show full content verbatim) vs just answering (user asks a question about a file, not to read it)
+- Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs "process the call" (ambiguous — ask which type)
 
 ## Identity
 
