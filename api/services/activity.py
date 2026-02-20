@@ -47,6 +47,7 @@ async def _resolve_person_name(org: dict, github_username: str) -> str:
         MATCH (p:Person)
         WHERE p.github = $gh
            OR toLower(p.name) = toLower($gh)
+           OR toLower(p.fullName) = toLower($gh)
         RETURN p.name AS name
         LIMIT 1
     """, {"gh": github_username})

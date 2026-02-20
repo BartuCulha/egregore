@@ -66,13 +66,18 @@ async def lookup_telegram_id(org: dict, name: str) -> str | None:
     result = await execute_query(
         org,
         """
-        MATCH (p:Person {name: $name})
+        MATCH (p:Person)
+        WHERE p.name = $name
+           OR p.github = $name
+           OR toLower(p.name) = toLower($name)
+           OR toLower(p.fullName) = toLower($name)
         OPTIONAL MATCH (tu:TelegramUser)-[:IDENTIFIES]->(p)
         OPTIONAL MATCH (tu2:TelegramUser)
           WHERE tu IS NULL AND tu2.username IS NOT NULL
           AND p.telegramUsername IS NOT NULL
           AND tu2.username = p.telegramUsername
         RETURN COALESCE(p.telegramId, tu.telegramId, tu2.telegramId) AS tid
+        LIMIT 1
         """,
         {"name": name},
     )

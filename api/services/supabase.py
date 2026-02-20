@@ -278,7 +278,10 @@ def upsert_user(
     telegram_username: Optional[str] = None,
     telegram_id: Optional[int] = None,
 ) -> dict:
-    """Create or update a user. Returns the user row."""
+    """Create or update a user. Returns the user row.
+
+    Note: display_name is per-org and lives on memberships, not users.
+    """
     data = {"github_username": github_username}
     if github_name is not None:
         data["github_name"] = github_name
@@ -347,8 +350,12 @@ def add_membership(
     github_username: str,
     role: str = "member",
     invited_by_username: Optional[str] = None,
+    display_name: Optional[str] = None,
 ) -> dict:
-    """Add a user as a member of an org. Creates user if needed."""
+    """Add a user as a member of an org. Creates user if needed.
+
+    display_name is per-org — stored on the membership, not the user.
+    """
     user = upsert_user(github_username)
     user_id = user["id"]
 
@@ -366,6 +373,8 @@ def add_membership(
     }
     if invited_by_id:
         data["invited_by"] = invited_by_id
+    if display_name is not None:
+        data["display_name"] = display_name
 
     result = get_client().table("memberships").upsert(
         data, on_conflict="org_slug,user_id"
