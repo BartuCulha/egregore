@@ -1,5 +1,3 @@
-# Waitlist
-
 View and manage the Egregore waitlist.
 
 ## Usage

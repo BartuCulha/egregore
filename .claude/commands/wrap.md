@@ -1,4 +1,6 @@
-Close your session with a personal summary. Enriches the auto-captured Session node with topic, summary, and connections. Saves everything.
+Close your session with a personal summary. Saves everything.
+
+Enriches the auto-captured Session node with topic, summary, and connections.
 
 ## When to invoke
 

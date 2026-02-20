@@ -1,4 +1,6 @@
-Ingest meeting knowledge from Granola. Uses a multi-dimensional analysis pipeline with 3 analyst agents + Opus synthesis to extract rich, high-dimensional artifacts from meetings.
+Import and analyze a meeting from Granola.
+
+Uses a multi-dimensional analysis pipeline with 3 analyst agents + Opus synthesis to extract rich, high-dimensional artifacts from meetings.
 
 Arguments: $ARGUMENTS (Optional: "sync" for batch mode, "backfill" to re-process historical meetings, or search term to find a specific meeting)
 

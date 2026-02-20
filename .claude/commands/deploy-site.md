@@ -1,4 +1,4 @@
-Deploy the marketing site from `Curve-Labs/egregore` → `Curve-Labs/egregore-site` (auto-deploys to egregore.xyz via Netlify).
+Deploy the marketing site to egregore.xyz.
 
 ## What to do
 
