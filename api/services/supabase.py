@@ -351,10 +351,19 @@ def add_membership(
     role: str = "member",
     invited_by_username: Optional[str] = None,
     display_name: Optional[str] = None,
+    member_role: Optional[str] = None,
+    focus: Optional[str] = None,
+    work_style: Optional[str] = None,
+    consent_session_tracking: Optional[bool] = None,
+    consent_transcript_sharing: Optional[bool] = None,
+    consent_telemetry: Optional[bool] = None,
+    contact_preference: Optional[str] = None,
 ) -> dict:
     """Add a user as a member of an org. Creates user if needed.
 
     display_name is per-org — stored on the membership, not the user.
+    Onboarding harvest fields (member_role, focus, work_style) and consent
+    fields are also per-org on memberships.
     """
     user = upsert_user(github_username)
     user_id = user["id"]
@@ -375,6 +384,20 @@ def add_membership(
         data["invited_by"] = invited_by_id
     if display_name is not None:
         data["display_name"] = display_name
+    if member_role is not None:
+        data["member_role"] = member_role
+    if focus is not None:
+        data["focus"] = focus
+    if work_style is not None:
+        data["work_style"] = work_style
+    if consent_session_tracking is not None:
+        data["consent_session_tracking"] = consent_session_tracking
+    if consent_transcript_sharing is not None:
+        data["consent_transcript_sharing"] = consent_transcript_sharing
+    if consent_telemetry is not None:
+        data["consent_telemetry"] = consent_telemetry
+    if contact_preference is not None:
+        data["contact_preference"] = contact_preference
 
     result = get_client().table("memberships").upsert(
         data, on_conflict="org_slug,user_id"
