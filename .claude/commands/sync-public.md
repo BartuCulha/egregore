@@ -1,4 +1,4 @@
-Sync this repo to the public egregore-core repo. One-way: curve-labs-core → egregore-core.
+Sync to the public egregore-core repo (one-way push).
 
 Arguments: $ARGUMENTS (Optional: "dry" for dry-run, "diff" to just show what changed)
 

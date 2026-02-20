@@ -1,4 +1,6 @@
-Close your session with a personal summary. Enriches the auto-captured Session node with topic, summary, and connections. Saves everything.
+Close your session with a personal summary. Saves everything.
+
+Enriches the auto-captured Session node with topic, summary, and connections.
 
 ## When to invoke
 
@@ -54,9 +56,9 @@ Run in parallel:
 Run in parallel:
 1. Active todos for this user (LIMIT 10):
    ```cypher
-   MATCH (t:Todo)-[:OWNED_BY]->(p:Person)
+   MATCH (t:Todo)-[:BY]->(p:Person)
    WHERE toLower(p.name) = $author AND t.status <> 'done'
-   RETURN t.id AS id, t.title AS title, t.status AS status
+   RETURN t.id AS id, t.text AS text, t.status AS status
    ORDER BY t.created DESC LIMIT 10
    ```
 

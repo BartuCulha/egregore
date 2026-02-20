@@ -13,7 +13,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WAL_DIR="$HOME/.egregore"
-WAL_FILE="$WAL_DIR/graph-wal.jsonl"
+# WAL file is per-instance to prevent cross-org data leakage on multi-instance machines
+PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+WAL_FILE="$WAL_DIR/graph-wal-${PROJ_HASH}.jsonl"
 MAX_BUFFER_BYTES=2097152  # 2MB
 MAX_ENTRIES_AFTER_TRUNCATE=200
 
@@ -59,6 +61,12 @@ cmd_append() {
     local size
     size=$(wc -c < "$WAL_FILE" 2>/dev/null | tr -d ' ')
     if [ "$size" -gt "$MAX_BUFFER_BYTES" ] 2>/dev/null; then
+      local total_entries
+      total_entries=$(wc -l < "$WAL_FILE" 2>/dev/null | tr -d ' ')
+      local dropped=$((total_entries - MAX_ENTRIES_AFTER_TRUNCATE))
+      if [ "$dropped" -gt 0 ]; then
+        echo "graph-wal: buffer exceeded ${MAX_BUFFER_BYTES} bytes. Dropping $dropped oldest entries (keeping $MAX_ENTRIES_AFTER_TRUNCATE)." >&2
+      fi
       local tmp="$WAL_FILE.truncate.$$"
       tail -n "$MAX_ENTRIES_AFTER_TRUNCATE" "$WAL_FILE" > "$tmp" 2>/dev/null \
         && mv "$tmp" "$WAL_FILE" \
