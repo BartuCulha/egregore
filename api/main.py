@@ -181,6 +181,13 @@ async def user_ensure(body: UserEnsure, org: dict = Depends(validate_api_key)):
             org_slug=org["slug"],
             github_username=body.github_username,
             display_name=body.display_name,
+            member_role=body.member_role,
+            focus=body.focus,
+            work_style=body.work_style,
+            consent_session_tracking=body.consent_session_tracking,
+            consent_transcript_sharing=body.consent_transcript_sharing,
+            consent_telemetry=body.consent_telemetry,
+            contact_preference=body.contact_preference,
         )
         return {"status": "ok", "user_id": user.get("id"), "membership_id": membership.get("id")}
     except Exception as e:
@@ -2463,6 +2470,7 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
         {
             "github_username": m["users"]["github_username"] if m.get("users") else None,
             "github_name": m["users"]["github_name"] if m.get("users") else None,
+            "display_name": m.get("display_name"),
             "telegram_username": m["users"]["telegram_username"] if m.get("users") else None,
             "role": m.get("role"),
             "status": m.get("status"),
@@ -3137,6 +3145,8 @@ async def admin_health(
             combined.append({
                 "github_username": username,
                 "org_slug": m_org,
+                "display_name": m.get("display_name"),
+                "github_name": user_info.get("github_name"),
                 "checked_in": False,
                 "checked_in_at": None,
                 "key_valid": None,

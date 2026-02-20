@@ -105,6 +105,15 @@ class UserEnsure(BaseModel):
     display_name: Optional[str] = None
     telegram_username: Optional[str] = None
     telegram_id: Optional[int] = None
+    # Onboarding harvest fields (per-org, stored on membership)
+    member_role: Optional[str] = None  # engineering|design|research|operations|other
+    focus: Optional[str] = None  # building|exploring|evaluating|other
+    work_style: Optional[str] = None  # async|collaborative|both
+    # Consent fields
+    consent_session_tracking: Optional[bool] = None
+    consent_transcript_sharing: Optional[bool] = None
+    consent_telemetry: Optional[bool] = None
+    contact_preference: Optional[str] = None  # all|none
 
 
 class UserProfileUpdate(BaseModel):

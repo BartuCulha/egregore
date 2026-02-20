@@ -56,6 +56,9 @@ bin/deploy-site.sh
 bin/transcript-backfill.sh
 bin/seeds
 
+# Org-specific identity
+egregore.md
+
 # Generated / personal
 memory
 .egregore
