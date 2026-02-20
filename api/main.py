@@ -142,6 +142,18 @@ async def activity_dashboard(
     return await get_activity_dashboard(org, github_username)
 
 
+@app.get("/api/personal/dashboard")
+async def personal_dashboard(
+    github_username: str = Query(..., description="GitHub username to resolve Person"),
+    time_range: str = Query("P7D", description="Neo4j duration string: P1D, P7D, P30D, P365D"),
+    session_id: str = Query(None, description="Current session ID for auto-capture lookup"),
+    org: dict = Depends(validate_api_key),
+):
+    """Personal dashboard: sessions, todos, quests, handoffs, open threads in one call."""
+    from .services.dashboard import get_personal_dashboard
+    return await get_personal_dashboard(org, github_username, time_range, session_id)
+
+
 # =============================================================================
 # USER SYNC
 # =============================================================================
