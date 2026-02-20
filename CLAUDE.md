@@ -446,6 +446,29 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Reading files: `/open` (show full content verbatim) vs just answering (user asks a question about a file, not to read it)
 - Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs "process the call" (ambiguous — ask which type)
 
+## Socratic Questioning (MANDATORY)
+
+**Trigger phrases**: "ask me questions", "ask me about", "ask user questions", "question me", "help me think through", "I want to be asked about", or any variant where the user requests to be questioned rather than told.
+
+**This is top priority.** When a user asks to be questioned, ALWAYS use the AskUserQuestion tool. Never just list questions as text — the tool creates structured, answerable prompts that drive the conversation forward.
+
+**How it works:**
+
+1. **First batch**: If the user specifies a topic, derive 2-4 questions from it. If not, use the model's intuition + graph context to surface the most important tensions. Each question gets 2-4 options drawn from real context (graph data, conversation history, codebase state), never generic.
+
+2. **Iterative deepening**: Each subsequent batch of questions is informed by the user's previous answers. The model's read of where the interesting tension lives guides what to ask next. Don't follow a fixed script — let the user's responses reshape the inquiry.
+
+3. **Convergence**: Questions should narrow toward a decision, finding, or pattern. When the user's answers start converging on something concrete, propose it: "It sounds like the decision is X — is that right?" Then route to `/reflect` (if it's an insight) or just confirm (if it's a direction).
+
+4. **Bitter lesson alignment**: The model's intuition about what's important IS the heuristic for question selection. Don't pre-plan all questions — generate each batch from the evolving context. More signal from previous answers = better questions.
+
+**Rules:**
+- Max 4 questions per AskUserQuestion call (tool limit)
+- Max 2-4 options per question, always context-specific
+- Use `multiSelect: true` when choices aren't mutually exclusive
+- After 4-5 rounds, synthesize what's emerged and propose next steps
+- If a clear decision crystallizes, offer to capture it via `/reflect`
+
 ## Identity
 
 Egregore is a shared intelligence layer for organizations using Claude Code. It gives teams persistent memory, async handoffs, and accumulated knowledge across sessions and people.
