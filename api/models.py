@@ -102,13 +102,15 @@ class UserEnsure(BaseModel):
     """Ensure a user + membership exist in Supabase."""
     github_username: str
     github_name: Optional[str] = None
+    display_name: Optional[str] = None
     telegram_username: Optional[str] = None
     telegram_id: Optional[int] = None
 
 
 class UserProfileUpdate(BaseModel):
-    """Update user profile (Telegram handle)."""
-    telegram_username: str
+    """Update user profile (Telegram handle and/or display name)."""
+    telegram_username: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 # --- Waitlist models ---

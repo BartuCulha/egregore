@@ -180,6 +180,7 @@ async def user_ensure(body: UserEnsure, org: dict = Depends(validate_api_key)):
         membership = add_membership(
             org_slug=org["slug"],
             github_username=body.github_username,
+            display_name=body.display_name,
         )
         return {"status": "ok", "user_id": user.get("id"), "membership_id": membership.get("id")}
     except Exception as e:
@@ -1316,7 +1317,7 @@ async def user_profile_get(authorization: str = Header(...)):
 
 @app.post("/api/user/profile")
 async def user_profile_update(body: UserProfileUpdate, authorization: str = Header(...)):
-    """Update user profile: set Telegram handle on all Person nodes + TelegramUser.
+    """Update user profile: set Telegram handle and/or display name.
 
     Auth: GitHub token. Cross-org update.
     """
@@ -1325,6 +1326,9 @@ async def user_profile_update(body: UserProfileUpdate, authorization: str = Head
     github_token = authorization.replace("Bearer ", "").strip()
     if not github_token:
         raise HTTPException(status_code=401, detail="Missing GitHub token")
+
+    if not body.telegram_username and not body.display_name:
+        raise HTTPException(status_code=400, detail="Must provide telegram_username or display_name")
 
     async with httpx.AsyncClient() as client:
         user_resp = await client.get(
@@ -1339,40 +1343,49 @@ async def user_profile_update(body: UserProfileUpdate, authorization: str = Head
     username = github_user.get("login", "")
     name = github_user.get("name", "") or username
 
-    # Strip leading @ and trim
-    tg_handle = body.telegram_username.lstrip("@").strip()
-    if not tg_handle:
-        raise HTTPException(status_code=400, detail="Telegram username cannot be empty")
-
     seed_org = _get_seed_org()
     if not seed_org:
         raise HTTPException(status_code=503, detail="No Neo4j connection available")
 
-    # Cross-org queries use execute_system_query (bypasses org scoping)
-    # Set telegramUsername on all Person nodes with matching github
-    await execute_system_query(seed_org, """
-        MATCH (p) WHERE p.github = $username
-        SET p.telegramUsername = $tgHandle
-    """, {"username": username, "tgHandle": tg_handle})
+    tg_handle = None
+    if body.telegram_username:
+        # Strip leading @ and trim
+        tg_handle = body.telegram_username.lstrip("@").strip()
+        if not tg_handle:
+            raise HTTPException(status_code=400, detail="Telegram username cannot be empty")
 
-    # MERGE TelegramUser and IDENTIFIES relationships
-    await execute_system_query(seed_org, """
-        MERGE (tu:TelegramUser {username: $tgHandle})
-        WITH tu
-        MATCH (p) WHERE p.github = $username
-        MERGE (tu)-[:IDENTIFIES]->(p)
-    """, {"username": username, "tgHandle": tg_handle})
+        # Cross-org queries use execute_system_query (bypasses org scoping)
+        # Set telegramUsername on all Person nodes with matching github
+        await execute_system_query(seed_org, """
+            MATCH (p) WHERE p.github = $username
+            SET p.telegramUsername = $tgHandle
+        """, {"username": username, "tgHandle": tg_handle})
+
+        # MERGE TelegramUser and IDENTIFIES relationships
+        await execute_system_query(seed_org, """
+            MERGE (tu:TelegramUser {username: $tgHandle})
+            WITH tu
+            MATCH (p) WHERE p.github = $username
+            MERGE (tu)-[:IDENTIFIES]->(p)
+        """, {"username": username, "tgHandle": tg_handle})
+
+    # Note: display_name is NOT updated here. It's a per-org setting — each Egregore
+    # instance sets it via /me → bin/graph.sh (org-scoped) → /api/user/ensure (org-scoped).
+    # This endpoint is cross-org (GitHub-token auth), so it only handles truly global
+    # properties like telegram_username.
 
     # Return updated profile (same shape as GET)
     # Re-gather memberships
+    tg_for_query = tg_handle or ""
     org_result = await execute_system_query(seed_org, """
         MATCH (p) WHERE p.github = $username AND p.org IS NOT NULL
         WITH COLLECT(DISTINCT p.org) AS orgIds
         UNWIND orgIds AS oid
         MATCH (o:Org {id: oid})
         OPTIONAL MATCH (tu:TelegramUser {username: $tgHandle})-[r:IN_GROUP {status: 'active'}]->(o)
+        WHERE $tgHandle <> ''
         RETURN o.id AS slug, o.name AS name, count(r) > 0 AS inGroup
-    """, {"username": username, "tgHandle": tg_handle})
+    """, {"username": username, "tgHandle": tg_for_query})
 
     memberships = []
     for row in org_result.get("values", []):
@@ -1386,6 +1399,7 @@ async def user_profile_update(body: UserProfileUpdate, authorization: str = Head
     return {
         "github_username": username,
         "name": name,
+        "display_name": body.display_name,
         "telegram_username": tg_handle,
         "memberships": memberships,
     }
@@ -1752,6 +1766,7 @@ async def org_members(slug: str, org: dict = Depends(validate_api_key)):
                 {
                     "github_username": m["users"]["github_username"] if m.get("users") else None,
                     "github_name": m["users"]["github_name"] if m.get("users") else None,
+                    "display_name": m.get("display_name"),
                     "role": m["role"],
                     "status": m["status"],
                     "joined_at": m.get("joined_at"),
@@ -3069,14 +3084,31 @@ async def admin_health(
             "telegram_chat_id": o.get("telegram_chat_id") or "",
         }
 
+    # Build membership lookup: (username, org) → membership data (for display_name)
+    membership_lookup = {}
+    for m in all_memberships:
+        user_info = m.get("users") or {}
+        username = user_info.get("github_username", "")
+        m_org = m.get("org_slug", "")
+        if username:
+            membership_lookup[(username, m_org)] = {
+                "display_name": m.get("display_name"),
+                "github_name": user_info.get("github_name"),
+            }
+
     # Build combined list: checked-in users + not-checked-in members
     seen_users = set()
     combined = []
 
-    # First: users with check-ins
+    # First: users with check-ins (enriched with display_name from membership)
     for key, c in checkin_map.items():
         seen_users.add(key)
-        combined.append({**c, "checked_in": True})
+        enriched = {**c, "checked_in": True}
+        member_info = membership_lookup.get(key)
+        if member_info:
+            enriched["display_name"] = member_info.get("display_name")
+            enriched["github_name"] = member_info.get("github_name")
+        combined.append(enriched)
 
     # Second: members without check-ins (also try github_org variant matching)
     for m in all_memberships:
