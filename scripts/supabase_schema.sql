@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS memberships (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'removed')),
+    display_name TEXT,
+    -- Onboarding harvest fields
+    member_role TEXT,  -- engineering, design, research, operations, other
+    focus TEXT,  -- building, exploring, evaluating, other
+    work_style TEXT,  -- async, collaborative, both
+    -- Consent fields
+    consent_session_tracking BOOLEAN DEFAULT true,
+    consent_transcript_sharing BOOLEAN DEFAULT true,
+    consent_telemetry BOOLEAN DEFAULT true,
+    contact_preference TEXT DEFAULT 'all',  -- all, none
     invited_by BIGINT REFERENCES users(id),
     joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(org_slug, user_id)
