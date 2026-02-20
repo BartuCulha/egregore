@@ -143,13 +143,20 @@ async def get_personal_dashboard(
         return_exceptions=True,
     )
 
-    def safe(r):
+    query_names = [
+        "sessions", "todos", "quests", "handoffs",
+        "open_threads", "stats", "current_session",
+    ]
+    errors = []
+
+    def safe(r, name: str):
         if isinstance(r, Exception):
+            errors.append({"query": name, "error": str(r)})
             return {"error": str(r)}
         return r
 
-    stats = _to_record(safe(results[5]))
-    sessions = _to_records(safe(results[0]))
+    stats = _to_record(safe(results[5], "stats"))
+    sessions = _to_records(safe(results[0], "sessions"))
 
     # Identity mismatch detection: if stats show 0 sessions but we have
     # a session_id (auto-capture just ran), flag it so the client can
@@ -166,11 +173,12 @@ async def get_personal_dashboard(
         "me": me,
         "time_range": time_range,
         "sessions": sessions,
-        "todos": _to_records(safe(results[1])),
-        "quests": _to_records(safe(results[2])),
-        "handoffs": _to_records(safe(results[3])),
-        "open_threads": _to_records(safe(results[4])),
+        "todos": _to_records(safe(results[1], "todos")),
+        "quests": _to_records(safe(results[2], "quests")),
+        "handoffs": _to_records(safe(results[3], "handoffs")),
+        "open_threads": _to_records(safe(results[4], "open_threads")),
         "stats": stats,
-        "current_session": _to_record(safe(results[6])),
+        "current_session": _to_record(safe(results[6], "current_session")),
         "identity_hint": identity_hint,
+        "errors": errors if errors else None,
     }

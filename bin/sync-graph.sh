@@ -111,13 +111,17 @@ if [ -d "$MEMORY/wraps" ]; then
   while IFS= read -r -d '' wfile; do
     fname="$(basename "$wfile" .md)"
     dirmonth="$(basename "$(dirname "$wfile")")"
-    # Derive sessionId — same logic as handoffs
-    if [[ "$dirmonth" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
-      day="${fname%%-*}"
-      rest="${fname#*-}"
-      sid="${dirmonth}-${day}-${rest}"
-    else
-      sid="$fname"
+    # Read session ID from wrap file metadata (matches auto-capture ID)
+    sid="$(grep -m1 '^\*\*Session\*\*:' "$wfile" 2>/dev/null | sed 's/\*\*Session\*\*:[[:space:]]*//' || true)"
+    # Fallback: derive from filename (pre-wrap files without Session metadata)
+    if [ -z "$sid" ]; then
+      if [[ "$dirmonth" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
+        day="${fname%%-*}"
+        rest="${fname#*-}"
+        sid="${dirmonth}-${day}-${rest}"
+      else
+        sid="$fname"
+      fi
     fi
 
     if ! id_exists "$sid" "$EXISTING_SESSIONS"; then
