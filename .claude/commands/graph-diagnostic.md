@@ -27,11 +27,21 @@ echo "Generated at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$DIAG_FILE"
 echo "" >> "$DIAG_FILE"
 ```
 
+Capture schema metadata for dynamic queries later:
+```bash
+ALL_LABELS=$(bash bin/graph.sh query "CALL db.labels() YIELD label RETURN label" 2>/dev/null | jq -r '.values[][0]')
+SCHEMA_VIZ=$(bash bin/graph.sh query "CALL db.schema.visualization()" 2>/dev/null)
+```
+
 ---
 
 ## Queries
 
-For each section below: append the section header to `$DIAG_FILE`, run the query, append the raw output. Use this pattern:
+For each section below: append the section header to `$DIAG_FILE`, run the query, append the raw output.
+
+**Static queries** use the pattern below directly. **Dynamic queries** (marked with **Dynamic.**) require building the Cypher from `$ALL_LABELS` or `$SCHEMA_VIZ` first — iterate labels with `while IFS= read -r L; do ... done <<< "$ALL_LABELS"` (NOT `for L in $ALL_LABELS` which breaks on whitespace).
+
+Standard pattern:
 
 ```bash
 echo "## Section Name" >> "$DIAG_FILE"
@@ -109,37 +119,62 @@ RETURN p.name AS name, keys(p) AS properties
 
 ### 7. Other Node Types (non-standard)
 
+**Dynamic.** For each label in `$ALL_LABELS` that is NOT Artifact, Session, Quest, or Person, run:
+
 ```cypher
-MATCH (n)
-WHERE NOT n:Artifact AND NOT n:Session AND NOT n:Quest AND NOT n:Person
-RETURN labels(n) AS label, count(n) AS count, keys(head(collect(n))) AS sample_properties
+MATCH (n:{Label})
+RETURN '{Label}' AS label, count(n) AS count, keys(head(collect(n))) AS sample_properties
 ```
+
+Append all results under a single section header.
 
 ### 8. Edge Distribution
 
-```cypher
-MATCH (a)-[r]->(b)
-RETURN type(r) AS edge_type, labels(a)[0] AS from_label, labels(b)[0] AS to_label, count(r) AS count
-ORDER BY count DESC
+**Dynamic.** Extract (from_label, type, to_label) triples from `$SCHEMA_VIZ`:
+
+```bash
+echo "$SCHEMA_VIZ" | jq -r '
+  .values[0] as [$nodes, $rels] |
+  ($nodes | map({(.elementId): .labels[0]}) | add) as $labelMap |
+  $rels[] |
+  "\($labelMap[.startNodeElementId])|\(.type)|\($labelMap[.endNodeElementId])"
+' | sort -u
 ```
+
+For each `FROM|TYPE|TO` triple, run:
+
+```cypher
+MATCH (a:{From})-[r:{Type}]->(b:{To})
+RETURN type(r) AS edge_type, '{From}' AS from_label, '{To}' AS to_label, count(r) AS count
+```
+
+Only append results where values array is non-empty.
 
 ### 9. Edge Properties
 
+**Dynamic.** Using the same triples from Query 8, for each `FROM|TYPE|TO` triple run:
+
 ```cypher
-MATCH ()-[r]->()
+MATCH (:{From})-[r:{Type}]->(:{To})
 WHERE size(keys(r)) > 0
 RETURN type(r) AS edge_type, keys(r) AS properties, count(r) AS count
 ORDER BY count DESC
 ```
 
+Only append results where values array is non-empty.
+
 ### 10. Edges With No Properties
 
+**Dynamic.** Using the same triples from Query 8, for each `FROM|TYPE|TO` triple run:
+
 ```cypher
-MATCH ()-[r]->()
+MATCH (:{From})-[r:{Type}]->(:{To})
 WHERE size(keys(r)) = 0
 RETURN type(r) AS edge_type, count(r) AS count
 ORDER BY count DESC
 ```
+
+Only append results where values array is non-empty.
 
 ### 11. Artifact Type Distribution
 
@@ -183,10 +218,11 @@ RETURN count(topic) AS unique_topics
 
 ### 15. Artifact Connectivity
 
+**Dynamic.** Build a degree expression from `$ALL_LABELS`. For each label `L`, produce `size([(a)-[r]-(:L) | r])` and join with ` + `. Then run:
+
 ```cypher
 MATCH (a:Artifact)
-OPTIONAL MATCH (a)-[r]-()
-WITH a, count(r) AS degree
+WITH a, {DEGREE_EXPR} AS degree
 RETURN min(degree) AS min_degree, max(degree) AS max_degree, avg(degree) AS avg_degree,
        count(CASE WHEN degree = 0 THEN 1 END) AS isolated_nodes,
        count(CASE WHEN degree = 1 THEN 1 END) AS single_edge,
@@ -196,10 +232,11 @@ RETURN min(degree) AS min_degree, max(degree) AS max_degree, avg(degree) AS avg_
 
 ### 16. Session Connectivity
 
+**Dynamic.** Same approach as Query 15 but for Sessions. Build degree expression from `$ALL_LABELS` using `size([(s)-[r]-(:L) | r])` parts:
+
 ```cypher
 MATCH (s:Session)
-OPTIONAL MATCH (s)-[r]-()
-WITH s, count(r) AS degree
+WITH s, {DEGREE_EXPR} AS degree
 RETURN min(degree) AS min_degree, max(degree) AS max_degree, avg(degree) AS avg_degree,
        count(CASE WHEN degree = 0 THEN 1 END) AS isolated_sessions,
        count(s) AS total
@@ -246,11 +283,13 @@ RETURN a {.*} AS artifact, property_count, keys(a) AS properties
 
 ### 21. Ghost Artifacts (full census)
 
+**Dynamic.** Build an edge list expression from `$ALL_LABELS`. For each label `L`, produce `[(a)-[r]-(:L) | type(r)]` and join with ` + `. Then run:
+
 ```cypher
 MATCH (a:Artifact)
 WHERE a.filePath IS NULL
-OPTIONAL MATCH (a)-[r]-()
-WITH a, count(r) AS degree, collect(type(r)) AS edge_types
+WITH a, {EDGE_LIST_EXPR} AS all_edges
+WITH a, size(all_edges) AS degree, all_edges AS edge_types
 RETURN a.id AS id, a.title AS title, a.type AS type, a.topics AS topics, a.created AS created, degree, edge_types, keys(a) AS all_properties
 ORDER BY a.created DESC
 ```
@@ -301,7 +340,10 @@ RETURN a.id AS id, a.title AS title, quests
 
 ```cypher
 MATCH (q:Quest)
-WHERE NOT (q)<-[:PART_OF]-() AND NOT (q)<-[:ADVANCED]-()
+OPTIONAL MATCH (a:Artifact)-[:PART_OF]->(q)
+OPTIONAL MATCH (s:Session)-[:ADVANCED]->(q)
+WITH q, count(a) AS artifacts, count(s) AS sessions
+WHERE artifacts = 0 AND sessions = 0
 RETURN q.id AS quest, q.title AS title, q.status AS status
 ```
 
