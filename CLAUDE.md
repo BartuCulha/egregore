@@ -192,8 +192,8 @@ Run these steps in order. Write `.egregore-state.json` after each step to checkp
    ```bash
    git clone "https://github.com/$GITHUB_ORG/$GITHUB_ORG-memory.git" "../$GITHUB_ORG-memory"
    cd "../$GITHUB_ORG-memory"
-   mkdir -p people handoffs knowledge/decisions knowledge/patterns
-   touch people/.gitkeep handoffs/.gitkeep knowledge/decisions/.gitkeep knowledge/patterns/.gitkeep
+   mkdir -p people handoffs knowledge/decisions knowledge/patterns knowledge/findings research/interviews research/participants
+   touch people/.gitkeep handoffs/.gitkeep knowledge/decisions/.gitkeep knowledge/patterns/.gitkeep knowledge/findings/.gitkeep research/interviews/.gitkeep research/participants/.gitkeep
    git add -A && git commit -m "Initialize memory structure" && git push
    cd -
    ```
