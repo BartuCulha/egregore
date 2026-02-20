@@ -430,7 +430,7 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 
 When a user describes intent that maps to a command, invoke it — don't wait for them to type the slash. Each command file has a `## When to invoke` section with trigger phrases and disambiguation. Load the command to get the full spec.
 
-**Core loop** — `/activity` `/handoff` `/save` `/reflect` `/todo`
+**Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting`
 **Reading** — `/open` (open/read/show me/display/pull up a file — always verbatim, never summarize)
 **Coordination** — `/ask` `/quest` `/issue` `/invite`
@@ -439,7 +439,8 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 
 **Disambiguation** — when intent is ambiguous between similar commands:
 - Capturing knowledge: `/reflect` (share-ready) vs `/note` (half-baked) vs `/deep-reflect` (cross-reference) vs `/archive` (AI steering patterns)
-- Ending vs continuing: `/handoff` (leaving) vs `/save` (still working)
+- Personal status: `/dashboard` (what did I work on) vs `/activity` (what's happening org-wide)
+- Ending vs continuing: `/wrap` (personal closure) vs `/handoff` (leaving notes for others) vs `/save` (still working)
 - Things to do: `/todo` (personal task) vs `/quest` (team exploration) vs `/issue` (something broken)
 - Questions: `/ask [person]` (async to teammate) vs just asking (agent can answer from context)
 - Reading files: `/open` (show full content verbatim) vs just answering (user asks a question about a file, not to read it)
