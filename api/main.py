@@ -2976,6 +2976,7 @@ async def me_egregores(github_username: str = Depends(validate_github_token)):
             {
                 "github_username": mem["users"]["github_username"] if mem.get("users") else None,
                 "github_name": mem["users"]["github_name"] if mem.get("users") else None,
+                "display_name": mem.get("display_name"),
                 "role": mem.get("role", "member"),
                 "status": mem.get("status", "active"),
             }
