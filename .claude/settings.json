@@ -57,17 +57,6 @@
         ]
       }
     ],
-    "WorktreeCreate": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/bin/worktree-setup.sh"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Read|Edit|Write|Bash|Glob|Grep",
