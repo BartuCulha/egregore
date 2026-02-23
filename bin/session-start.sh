@@ -963,7 +963,7 @@ else
   echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
   echo ""
   if [ "$IN_WORKTREE" = "true" ]; then
-    echo "BRANCH RULE: When the user responds with what they're working on, rename the worktree branch: git branch -m dev/{author}/{topic-slug}. Then rebase onto develop: git rebase origin/develop --quiet. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
+    echo "BRANCH RULE: When the user responds with what they're working on, rename the worktree branch: git branch -m dev/{author}/{topic-slug}. Then rebase onto develop: git rebase origin/develop --quiet. Do this BEFORE any other work. Derive the topic slug from their description. Even for pure questions — always rename the branch so the user never stays on a detached HEAD."
   else
     echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
   fi
