@@ -99,6 +99,21 @@ Creating branch in frontend...
 Ready to work. /save when done.
 ```
 
+## Worktree mode
+
+If `.git` is a file (not a directory), you're in a worktree:
+- Rename the current branch instead of creating a new one:
+  ```bash
+  git fetch origin develop --quiet
+  git branch -m dev/$AUTHOR/$TOPIC_SLUG
+  git rebase origin/develop --quiet
+  ```
+- For managed repos: resolve sibling paths via main repo root:
+  ```bash
+  REPO_ROOT=$(git rev-parse --git-common-dir | sed 's|/\.git$||')
+  git -C "$(dirname "$REPO_ROOT")/$REPO" checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+  ```
+
 ## Next
 
 Make your changes, then `/commit` or `/save` when ready.

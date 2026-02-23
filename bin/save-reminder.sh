@@ -24,11 +24,22 @@ fi
 MEMORY_DIRTY=""
 EGREGORE_DIRTY=""
 
+# Resolve memory directory (worktree-safe)
+MEMORY_DIR=""
+if [ -L memory ] && [ -d memory ]; then
+  MEMORY_DIR="memory"
+else
+  _REPO_ROOT=$(git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+  if [ -n "$_REPO_ROOT" ] && [ -L "$_REPO_ROOT/memory" ] && [ -d "$_REPO_ROOT/memory" ]; then
+    MEMORY_DIR=$(realpath "$_REPO_ROOT/memory" 2>/dev/null || echo "")
+  fi
+fi
+
 # Memory: uncommitted or unpushed changes
-if [ -L memory ] && [ -d memory/.git ]; then
-  if [ -n "$(git -C memory status --porcelain 2>/dev/null)" ]; then
+if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/.git" ]; then
+  if [ -n "$(git -C "$MEMORY_DIR" status --porcelain 2>/dev/null)" ]; then
     MEMORY_DIRTY="uncommitted"
-  elif [ -n "$(git -C memory log origin/main..HEAD --oneline 2>/dev/null)" ]; then
+  elif [ -n "$(git -C "$MEMORY_DIR" log origin/main..HEAD --oneline 2>/dev/null)" ]; then
     MEMORY_DIRTY="unpushed"
   fi
 fi
@@ -46,7 +57,7 @@ fi
 # Build hint
 PARTS=""
 if [ -n "$MEMORY_DIRTY" ]; then
-  COUNT=$(git -C memory status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  COUNT=$(git -C "$MEMORY_DIR" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
   PARTS="$COUNT memory file(s)"
 fi
 if [ -n "$EGREGORE_DIRTY" ]; then

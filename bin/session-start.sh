@@ -8,6 +8,14 @@ FRAMEWORK_VERSION="2"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+# --- Detect worktree mode ---
+IN_WORKTREE="false"
+REPO_ROOT="$SCRIPT_DIR"
+if [ -f "$SCRIPT_DIR/.git" ] && ! [ -d "$SCRIPT_DIR/.git" ]; then
+  IN_WORKTREE="true"
+  REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+fi
+
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
 HEALTH_GIT="skip"
@@ -259,6 +267,11 @@ compute_boundary() {
     managed_repos_json="$managed_repos_json]"
   fi
 
+  # In worktree mode, include main repo root in boundary
+  if [ "$IN_WORKTREE" = "true" ]; then
+    managed_repos_json=$(echo "$managed_repos_json" | jq --arg r "$REPO_ROOT" '. + [$r]')
+  fi
+
   # Collect denied paths from instance registry
   local denied_paths_json="[]"
   local registry="$HOME/.egregore/instances.json"
@@ -310,17 +323,26 @@ git fetch origin --quiet 2>/dev/null &
 git remote add upstream https://github.com/Curve-Labs/egregore-core.git 2>/dev/null || true
 git fetch upstream main --quiet 2>/dev/null &
 
-# Sync memory in parallel
-MEMORY_SYNCED="false"
-if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory/.git" ]; then
-  git -C "$SCRIPT_DIR/memory" fetch origin --quiet 2>/dev/null &
+# Resolve memory directory (worktree-safe)
+MEMORY_DIR=""
+if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory" ]; then
+  MEMORY_DIR=$(realpath "$SCRIPT_DIR/memory" 2>/dev/null)
+elif [ -L "$REPO_ROOT/memory" ] && [ -d "$REPO_ROOT/memory" ]; then
+  MEMORY_DIR=$(realpath "$REPO_ROOT/memory" 2>/dev/null)
 fi
 
-# Fetch managed repos in parallel
+# Sync memory in parallel
+MEMORY_SYNCED="false"
+if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/.git" ]; then
+  git -C "$MEMORY_DIR" fetch origin --quiet 2>/dev/null &
+fi
+
+# Fetch managed repos in parallel (use REPO_ROOT for worktree-safe sibling paths)
+PARENT_DIR="$(dirname "$REPO_ROOT")"
 MANAGED_REPOS=$(jq -r '.repos[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 for REPO in $MANAGED_REPOS; do
-  if [ -d "$SCRIPT_DIR/../$REPO/.git" ]; then
-    git -C "$SCRIPT_DIR/../$REPO" fetch origin --quiet 2>/dev/null &
+  if [ -d "$PARENT_DIR/$REPO/.git" ]; then
+    git -C "$PARENT_DIR/$REPO" fetch origin --quiet 2>/dev/null &
   fi
 done
 
@@ -403,16 +425,28 @@ ACTION="ready"
 SAVED_BRANCH=""
 BRANCH="${CURRENT_BRANCH:-develop}"
 
-if ! setup_develop 2>/dev/null; then
-  HEALTH_GIT="fail"
+if [ "$IN_WORKTREE" = "true" ]; then
+  # Worktree: don't switch branches. Just update develop ref.
+  CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+  BRANCH="${CURRENT_BRANCH:-worktree}"
+  git fetch origin develop:develop --quiet 2>/dev/null || true
+  DEVELOP_SYNCED="true"
+  COMMITS_AHEAD=0
+  if git show-ref --verify --quiet refs/remotes/origin/main 2>/dev/null; then
+    COMMITS_AHEAD=$(git rev-list origin/main..develop --count 2>/dev/null || echo "0")
+  fi
+else
+  if ! setup_develop 2>/dev/null; then
+    HEALTH_GIT="fail"
+  fi
 fi
 
 # --- Sync memory ---
-if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory/.git" ]; then
-  MEM_LOCAL=$(git -C "$SCRIPT_DIR/memory" rev-parse HEAD 2>/dev/null || echo "")
-  MEM_REMOTE=$(git -C "$SCRIPT_DIR/memory" rev-parse origin/main 2>/dev/null || echo "")
+if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/.git" ]; then
+  MEM_LOCAL=$(git -C "$MEMORY_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  MEM_REMOTE=$(git -C "$MEMORY_DIR" rev-parse origin/main 2>/dev/null || echo "")
   if [ -n "$MEM_LOCAL" ] && [ -n "$MEM_REMOTE" ] && [ "$MEM_LOCAL" != "$MEM_REMOTE" ]; then
-    git -C "$SCRIPT_DIR/memory" pull origin main --quiet 2>/dev/null || true
+    git -C "$MEMORY_DIR" pull origin main --quiet 2>/dev/null || true
   fi
   MEMORY_SYNCED="true"
 fi
@@ -420,7 +454,7 @@ fi
 # --- Sync managed repos ---
 REPOS_STATUS=""
 for REPO in $MANAGED_REPOS; do
-  REPO_DIR="$SCRIPT_DIR/../$REPO"
+  REPO_DIR="$PARENT_DIR/$REPO"
   if [ -d "$REPO_DIR/.git" ]; then
     # Ensure develop branch exists locally
     if ! git -C "$REPO_DIR" show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
@@ -582,8 +616,8 @@ fi
 # 1. Recent handoffs (background)
 (
   JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    FILES=$(ls -t "$SCRIPT_DIR/memory/handoffs/"*.md 2>/dev/null | grep -v index.md | head -3)
+  if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/handoffs" ]; then
+    FILES=$(ls -t "$MEMORY_DIR/handoffs/"*.md 2>/dev/null | grep -v index.md | head -3)
     JSON="["
     FIRST=true
     for F in $FILES; do
@@ -602,10 +636,10 @@ fi
 # 2. Quests (background)
 (
   JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/quests" ]; then
+  if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/quests" ]; then
     JSON="["
     FIRST=true
-    for F in "$SCRIPT_DIR/memory/quests/"*.md; do
+    for F in "$MEMORY_DIR/quests/"*.md; do
       [ -e "$F" ] || continue
       echo "$F" | grep -q draft && continue
       NAME=$(basename "$F" .md)
@@ -626,7 +660,7 @@ fi
 # 4. Team recent memory commits (background)
 (
   JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/.git" ]; then
+  if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/.git" ]; then
     JSON="["
     FIRST=true
     while IFS='|' read -r T_AUTHOR T_TIME T_MSG; do
@@ -635,7 +669,7 @@ fi
       $FIRST || JSON="$JSON,"
       JSON="$JSON{\"author\":\"$T_AUTHOR\",\"time\":\"$T_TIME\",\"message\":\"$T_MSG_ESC\"}"
       FIRST=false
-    done <<< "$(git -C "$SCRIPT_DIR/memory" log --format="%an|%ar|%s" -5 2>/dev/null)"
+    done <<< "$(git -C "$MEMORY_DIR" log --format="%an|%ar|%s" -5 2>/dev/null)"
     JSON="$JSON]"
   fi
   echo "$JSON" > "$CTX_DIR/team"
@@ -653,8 +687,8 @@ fi
 # 6. Handoffs addressed to user (background)
 (
   JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | head -5 || true)
+  if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR/handoffs" ]; then
+    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$MEMORY_DIR/handoffs/" 2>/dev/null | head -5 || true)
     JSON="["
     FIRST=true
     for AF in $ADDRESSED; do
@@ -736,6 +770,9 @@ fi
 GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 
 BRANCH_STATUS="$BRANCH · synced"
+if [ "$IN_WORKTREE" = "true" ]; then
+  BRANCH_STATUS="$BRANCH_STATUS · worktree"
+fi
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
   BRANCH_STATUS="$BRANCH_STATUS · $COMMITS_AHEAD ahead"
 fi
@@ -783,39 +820,57 @@ if [ -n "$REPOS_STATUS" ]; then
   printf "$REPOS_STATUS"
 fi
 
-# Auto-apply upstream framework updates (bin/, .claude/commands/, CLAUDE.md, skills/)
-# Only update when upstream has NEW commits we don't have (forward-only).
-# git log HEAD..upstream/main shows commits in upstream that aren't in our history.
-UPSTREAM_NEW=$(git log HEAD..upstream/main --oneline -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-if [ -n "$UPSTREAM_NEW" ]; then
-  UPDATE_COUNT=$(echo "$UPSTREAM_NEW" | wc -l | tr -d ' ')
-  # Check for uncommitted local changes to framework files (protects active development)
-  LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-  if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
-    echo "  ⟳ Framework update available — run /update"
-  elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
-    git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
-    git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-    echo "  ✓ Framework updated"
-  else
-    echo "  ⟳ Framework update available — run /update"
+# Auto-apply upstream framework updates (skip in worktree — main repo handles this)
+if [ "$IN_WORKTREE" != "true" ]; then
+  # Only update when upstream has NEW commits we don't have (forward-only).
+  # git log HEAD..upstream/main shows commits in upstream that aren't in our history.
+  UPSTREAM_NEW=$(git log HEAD..upstream/main --oneline -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
+  if [ -n "$UPSTREAM_NEW" ]; then
+    UPDATE_COUNT=$(echo "$UPSTREAM_NEW" | wc -l | tr -d ' ')
+    # Check for uncommitted local changes to framework files (protects active development)
+    LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
+    if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
+      echo "  ⟳ Framework update available — run /update"
+    elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
+      git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
+      git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+      echo "  ✓ Framework updated"
+    else
+      echo "  ⟳ Framework update available — run /update"
+    fi
   fi
 fi
 
-# --- One-time migration: fix aliases to use 'claude "start"' ---
-# v1: 'claude start' → 'claude' (cross-instance bug)
-# v2: 'claude' → 'claude "start"' (blank prompt — auto-sends first message)
-ALIAS_VERSION=$(jq -r '.alias_version // 0' "$STATE_FILE" 2>/dev/null || echo "0")
-if [ "$ALIAS_VERSION" -lt 2 ] 2>/dev/null; then
-  for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
-    if [ -f "$profile" ] && grep -q "$SCRIPT_DIR" "$profile" 2>/dev/null; then
-      # Replace any egregore alias pointing to this directory with the correct command
-      # Handles: && claude start, && claude, && claude "start" (idempotent)
-      sed -i.bak "s|&& claude start|\\&\\& claude \"start\"|g; s|&& claude'|\\&\\& claude \"start\"'|g" "$profile" 2>/dev/null && rm -f "${profile}.bak" || true
+# --- One-time migration: fix aliases (skip in worktree — main repo handles this) ---
+if [ "$IN_WORKTREE" != "true" ]; then
+  # v1: 'claude start' → 'claude' (cross-instance bug)
+  # v2: 'claude' → 'claude "start"' (blank prompt — auto-sends first message)
+  ALIAS_VERSION=$(jq -r '.alias_version // 0' "$STATE_FILE" 2>/dev/null || echo "0")
+  if [ "$ALIAS_VERSION" -lt 2 ] 2>/dev/null; then
+    for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+      if [ -f "$profile" ] && grep -q "$SCRIPT_DIR" "$profile" 2>/dev/null; then
+        sed -i.bak "s|&& claude start|\\&\\& claude \"start\"|g; s|&& claude'|\\&\\& claude \"start\"'|g" "$profile" 2>/dev/null && rm -f "${profile}.bak" || true
+      fi
+    done
+    if [ -f "$STATE_FILE" ] && jq . "$STATE_FILE" >/dev/null 2>&1; then
+      jq '. + {"alias_fixed": true, "alias_version": 2}' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
     fi
-  done
-  if [ -f "$STATE_FILE" ] && jq . "$STATE_FILE" >/dev/null 2>&1; then
-    jq '. + {"alias_fixed": true, "alias_version": 2}' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
+
+  # v3: add -w flag for worktree isolation (version-gated on Claude Code >= 2.1.50)
+  if [ "$ALIAS_VERSION" -lt 3 ] 2>/dev/null; then
+    CLAUDE_VER=$(claude --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1 || echo "0")
+    CLAUDE_MIN="2.1.50"
+    if [ "$(printf '%s\n' "$CLAUDE_MIN" "$CLAUDE_VER" | sort -V | head -1)" = "$CLAUDE_MIN" ]; then
+      for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+        if [ -f "$profile" ] && grep -q "$SCRIPT_DIR" "$profile" 2>/dev/null; then
+          sed -i.bak 's|&& claude "start"|\&\& claude -w "start"|g' "$profile" 2>/dev/null && rm -f "${profile}.bak" || true
+        fi
+      done
+      if [ -f "$STATE_FILE" ] && jq . "$STATE_FILE" >/dev/null 2>&1; then
+        jq '. + {"alias_version": 3}' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+      fi
+    fi
   fi
 fi
 
@@ -850,6 +905,14 @@ if [ -f "$SCRIPT_DIR/egregore.md" ]; then
   echo ""
   echo "<!-- egregore-soul"
   cat "$SCRIPT_DIR/egregore.md"
+  echo "-->"
+fi
+
+# Include instance context if present (gitignored, instance-specific)
+if [ -f "$SCRIPT_DIR/.egregore/context.md" ]; then
+  echo ""
+  echo "<!-- instance-context"
+  cat "$SCRIPT_DIR/.egregore/context.md"
   echo "-->"
 fi
 
@@ -899,5 +962,9 @@ else
   echo ""
   echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
   echo ""
-  echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
+  if [ "$IN_WORKTREE" = "true" ]; then
+    echo "BRANCH RULE: When the user responds with what they're working on, rename the worktree branch: git branch -m dev/{author}/{topic-slug}. Then rebase onto develop: git rebase origin/develop --quiet. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
+  else
+    echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
+  fi
 fi
