@@ -42,14 +42,19 @@ Not this: user is leaving/done → `/handoff` (which auto-saves)
    - User sees: "Memory pushed"
 
 3. **For egregore** (commands, scripts, config):
-   - Ensure on a working branch (`dev/*`, `feature/*`, or `bugfix/*`). If not (e.g. still on develop), create one:
+   - **Worktree detection**: Check `[ -f ".git" ] && ! [ -d ".git" ]`
+   - Ensure on a working branch (`dev/*`, `feature/*`, or `bugfix/*`). If not:
+     - **In worktree**: Rename the current branch:
+       ```bash
+       git branch -m dev/$AUTHOR/$TOPIC_SLUG
+       ```
+     - **Not in worktree** (existing logic):
+       ```bash
+       git fetch origin develop --quiet
+       git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+       ```
      - Derive a topic slug from the changes being saved (look at modified files, commit messages, or conversation context)
-     - Create branch: `dev/$AUTHOR/{topic-slug}` from develop
      - If no clear topic, fall back to date: `dev/$AUTHOR/$(date +%Y-%m-%d)`
-     ```bash
-     git fetch origin develop --quiet
-     git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
-     ```
    - Commit all changes to working branch
    - **Rebase onto latest develop before pushing** (prevents stale overwrites):
      ```bash
@@ -102,9 +107,14 @@ Not this: user is leaving/done → `/handoff` (which auto-saves)
 
 4. **For managed repos** (listed in `egregore.json` → `repos[]`, located at `../{repo}/`):
    - Read the repos list: `jq -r '.repos[]? // empty' egregore.json`
+   - **Managed repo path resolution** (worktree-safe):
+     ```bash
+     REPO_ROOT=$(git rev-parse --git-common-dir | sed 's|/\.git$||')
+     REPO_DIR="$(dirname "$REPO_ROOT")/$REPO"
+     ```
    - For each repo, check for uncommitted changes:
      ```bash
-     REPO_DIR="$(cd .. && pwd)/$REPO"
+     REPO_DIR="$(dirname "$REPO_ROOT")/$REPO"
      if [ -n "$(git -C "$REPO_DIR" status --porcelain)" ]; then
        # Has changes
      fi
