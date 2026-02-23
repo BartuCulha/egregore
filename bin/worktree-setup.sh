@@ -8,22 +8,14 @@
 # IMPORTANT: Do NOT use set -euo pipefail — jq failures or missing
 # fields must not crash the entire hook. Handle errors explicitly.
 
-# Debug trace (first thing — proves the hook fires)
-echo "WorktreeCreate hook fired at $(date)" >> /tmp/egregore-hook-debug.txt 2>/dev/null
-
 # Read hook input from stdin (all hooks receive JSON)
 HOOK_INPUT=$(cat 2>/dev/null || true)
-echo "HOOK_INPUT=$HOOK_INPUT" >> /tmp/egregore-hook-debug.txt 2>/dev/null
-
 NAME=$(echo "$HOOK_INPUT" | jq -r '.name // empty' 2>/dev/null || true)
 CWD=$(echo "$HOOK_INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
 SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 
-echo "NAME=$NAME CWD=$CWD SESSION_ID=$SESSION_ID" >> /tmp/egregore-hook-debug.txt 2>/dev/null
-
 if [ -z "$NAME" ]; then
   echo "WorktreeCreate: no name in hook input" >&2
-  echo "FAIL: no name" >> /tmp/egregore-hook-debug.txt 2>/dev/null
   exit 1
 fi
 
@@ -31,7 +23,6 @@ fi
 REPO_ROOT="${CWD:-$(pwd)}"
 if [ ! -d "$REPO_ROOT/.git" ]; then
   echo "WorktreeCreate: not a git repo root: $REPO_ROOT" >&2
-  echo "FAIL: not git repo: $REPO_ROOT" >> /tmp/egregore-hook-debug.txt 2>/dev/null
   exit 1
 fi
 
@@ -40,14 +31,10 @@ WORKTREE_DIR="$REPO_ROOT/.claude/worktrees/$NAME"
 mkdir -p "$(dirname "$WORKTREE_DIR")" 2>/dev/null || true
 
 # Create git worktree (we replace the default behavior)
-# Redirect git output to /dev/null — only our final echo goes to stdout
 if ! git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" --detach --quiet >/dev/null 2>/dev/null; then
   echo "WorktreeCreate: git worktree add failed for $WORKTREE_DIR" >&2
-  echo "FAIL: git worktree add failed" >> /tmp/egregore-hook-debug.txt 2>/dev/null
   exit 1
 fi
-
-echo "Worktree created at $WORKTREE_DIR" >> /tmp/egregore-hook-debug.txt 2>/dev/null
 
 # --- Fix symlinks for gitignored files ---
 
@@ -79,10 +66,7 @@ fi
 # Both hooks share the same session_id. Write to /tmp so SessionStart can read it.
 if [ -n "$SESSION_ID" ]; then
   echo "$WORKTREE_DIR" > "/tmp/egregore-worktree-$SESSION_ID" 2>/dev/null || true
-  echo "Signal written to /tmp/egregore-worktree-$SESSION_ID" >> /tmp/egregore-hook-debug.txt 2>/dev/null
 fi
-
-echo "SUCCESS" >> /tmp/egregore-hook-debug.txt 2>/dev/null
 
 # Print the absolute path — ONLY this line goes to stdout
 echo "$WORKTREE_DIR"
