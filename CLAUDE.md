@@ -36,12 +36,6 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 
 **This is a mandatory behavioral rule.** When the user answers "What are you working on?" (or says anything describing work), your **first action** — before reading files, before exploring code, before anything else — is to create a working branch:
 
-**In worktree mode** (`.git` is a file, not a directory — greeting shows `· worktree`):
-1. Derive a topic slug from what the user said (same rules as `/branch`)
-2. `git branch -m dev/{author}/{slug}` then `git rebase origin/develop --quiet`
-3. Confirm: `On dev/{author}/{slug} now.`
-
-**In normal mode** (`.git` is a directory):
 1. Derive a topic slug from what the user said (same rules as `/branch`)
 2. `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`
 3. Confirm: `On dev/{author}/{slug} now.`
@@ -200,7 +194,6 @@ main ← stable (/release)
 ```
 
 - **On launch**: syncs develop + memory. Does NOT create a branch.
-- **Worktree mode** (`claude -w`): Each session gets an isolated worktree under `.claude/worktrees/`. The greeting shows `· worktree` in the branch status. Branch operations use `git branch -m` (rename) instead of `git checkout -b` (create). This prevents concurrent sessions from interfering with each other's branches.
 - **Branch creation**: MANDATORY on user's first work-related message. See "After Greeting — BRANCH ON FIRST RESPONSE" above. The branch is created from the user's description of what they're working on. `/save` is a last-resort fallback, not the normal path.
 - **Resuming**: if on a working branch at launch, rebase onto develop and continue.
 - **If still on develop after two messages**, you missed the branch creation. Create one immediately from whatever the user has described so far.

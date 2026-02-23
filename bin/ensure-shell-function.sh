@@ -67,14 +67,7 @@ if [[ "$PROFILE" == *"/fish/"* ]]; then
   IS_FISH=true
 fi
 
-# Version-gate -w flag: only use worktree mode if Claude Code >= 2.1.50
-CLAUDE_VER=$(claude --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1 || echo "0")
-CLAUDE_MIN="2.1.50"
-if [ "$(printf '%s\n' "$CLAUDE_MIN" "$CLAUDE_VER" | sort -V | head -1)" = "$CLAUDE_MIN" ]; then
-  ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude -w \"start\""
-else
-  ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude \"start\""
-fi
+ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude \"start\""
 
 # --- Check if this directory already has an alias ---
 get_existing_alias() {
