@@ -1,4 +1,4 @@
-Deploy a preview of the marketing site.
+Deploy a preview of the marketing site. Pushes to the `preview` branch on egregore-site — Netlify creates a branch deploy at a preview URL. Safe for anyone to run.
 
 ## What to do
 
