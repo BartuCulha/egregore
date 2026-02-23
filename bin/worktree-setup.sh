@@ -28,7 +28,7 @@ WORKTREE_DIR="$REPO_ROOT/.claude/worktrees/$NAME"
 mkdir -p "$(dirname "$WORKTREE_DIR")" 2>/dev/null
 
 # Create git worktree (the default behavior we're replacing)
-git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" --detach --quiet 2>&2 || {
+git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" --detach --quiet 2>/dev/null || {
   echo "WorktreeCreate: git worktree add failed" >&2
   exit 1
 }
