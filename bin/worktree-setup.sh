@@ -4,19 +4,22 @@
 # Must: create the worktree, fix symlinks, print absolute path to stdout.
 # Any non-zero exit fails worktree creation.
 # All non-path output must go to stderr (stdout is parsed by Claude Code).
-set -euo pipefail
+#
+# IMPORTANT: Do NOT use set -euo pipefail — jq failures or missing
+# fields must not crash the entire hook. Handle errors explicitly.
 
-# Read hook input from stdin
-HOOK_INPUT=$(cat)
-NAME=$(echo "$HOOK_INPUT" | jq -r '.name // empty' 2>/dev/null)
-CWD=$(echo "$HOOK_INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+# Read hook input from stdin (all hooks receive JSON)
+HOOK_INPUT=$(cat 2>/dev/null || true)
+NAME=$(echo "$HOOK_INPUT" | jq -r '.name // empty' 2>/dev/null || true)
+CWD=$(echo "$HOOK_INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
+SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 
 if [ -z "$NAME" ]; then
-  echo "WorktreeCreate: no name provided" >&2
+  echo "WorktreeCreate: no name in hook input" >&2
   exit 1
 fi
 
-# Resolve repo root from cwd
+# Resolve repo root from cwd (Claude sets cwd to the project directory)
 REPO_ROOT="${CWD:-$(pwd)}"
 if [ ! -d "$REPO_ROOT/.git" ]; then
   echo "WorktreeCreate: not a git repo root: $REPO_ROOT" >&2
@@ -25,19 +28,19 @@ fi
 
 # Create worktree directory
 WORKTREE_DIR="$REPO_ROOT/.claude/worktrees/$NAME"
-mkdir -p "$(dirname "$WORKTREE_DIR")" 2>/dev/null
+mkdir -p "$(dirname "$WORKTREE_DIR")" 2>/dev/null || true
 
-# Create git worktree (the default behavior we're replacing)
-git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" --detach --quiet 2>/dev/null || {
-  echo "WorktreeCreate: git worktree add failed" >&2
+# Create git worktree (we replace the default behavior)
+if ! git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" --detach --quiet 2>&1 >&2; then
+  echo "WorktreeCreate: git worktree add failed for $WORKTREE_DIR" >&2
   exit 1
-}
+fi
 
 # --- Fix symlinks for gitignored files ---
 
 # 1. Memory symlink (relative → absolute)
 if [ -L "$REPO_ROOT/memory" ]; then
-  MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null || echo "")
+  MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null || true)
   if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
     rm -f "$WORKTREE_DIR/memory" 2>/dev/null || true
     ln -sf "$MEMORY_TARGET" "$WORKTREE_DIR/memory"
@@ -59,23 +62,11 @@ if [ -d "$REPO_ROOT/.egregore" ] && [ ! -d "$WORKTREE_DIR/.egregore" ]; then
   ln -sf "$REPO_ROOT/.egregore" "$WORKTREE_DIR/.egregore"
 fi
 
-# Signal the worktree path to SessionStart hook via session env directory
-# Both hooks share the same CLAUDE_ENV_FILE session directory
-if [ -n "$CLAUDE_ENV_FILE" ]; then
-  SESSION_ENV_DIR=$(dirname "$CLAUDE_ENV_FILE")
-  echo "$WORKTREE_DIR" > "$SESSION_ENV_DIR/worktree-path.txt" 2>/dev/null || true
+# --- Signal worktree path to SessionStart hook ---
+# Both hooks share the same session_id. Write to /tmp so SessionStart can read it.
+if [ -n "$SESSION_ID" ]; then
+  echo "$WORKTREE_DIR" > "/tmp/egregore-worktree-$SESSION_ID" 2>/dev/null || true
 fi
 
-# DEBUG: capture hook environment (remove after testing)
-{
-  echo "=== WorktreeCreate Debug $(date) ==="
-  echo "CLAUDE_ENV_FILE=${CLAUDE_ENV_FILE:-unset}"
-  echo "WORKTREE_DIR=$WORKTREE_DIR"
-  echo "REPO_ROOT=$REPO_ROOT"
-  echo "NAME=$NAME"
-  env | grep -i claude || true
-  echo "=== End Debug ==="
-} >> /tmp/egregore-hook-debug.txt 2>&1
-
-# Print the absolute path (this is what Claude Code reads)
+# Print the absolute path — ONLY this line goes to stdout
 echo "$WORKTREE_DIR"

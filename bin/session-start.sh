@@ -8,37 +8,29 @@ FRAMEWORK_VERSION="2"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-# --- Worktree mode ---
-# session-start.sh always runs from the main repo ($SCRIPT_DIR).
-# Claude Code creates worktrees natively with --worktree.
-# We fix symlinks for all active worktrees here (idempotent).
+# --- Read hook input (all Claude Code hooks receive JSON on stdin) ---
+HOOK_INPUT=""
+if [ ! -t 0 ]; then
+  HOOK_INPUT=$(cat 2>/dev/null || true)
+fi
+HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+
+# --- Detect worktree mode ---
+# WorktreeCreate hook fires BEFORE SessionStart and writes the worktree path
+# to /tmp/egregore-worktree-{session_id}. Both hooks share the same session_id.
 IN_WORKTREE="false"
 REPO_ROOT="$SCRIPT_DIR"
-
-# Fix symlinks in all active worktrees (gitignored files don't exist in worktrees)
-for WT_PATH in $(git worktree list --porcelain 2>/dev/null | grep "^worktree " | sed 's/^worktree //' | grep ".claude/worktrees/" || true); do
-  if [ -d "$WT_PATH" ]; then
-    # Memory symlink
-    if [ ! -L "$WT_PATH/memory" ] && [ -L "$SCRIPT_DIR/memory" ]; then
-      MEMORY_TARGET=$(realpath "$SCRIPT_DIR/memory" 2>/dev/null || echo "")
-      if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
-        ln -sf "$MEMORY_TARGET" "$WT_PATH/memory"
-      fi
-    fi
-    # .env
-    if [ ! -f "$WT_PATH/.env" ] && [ -f "$SCRIPT_DIR/.env" ]; then
-      ln -sf "$SCRIPT_DIR/.env" "$WT_PATH/.env"
-    fi
-    # .egregore-state.json
-    if [ ! -f "$WT_PATH/.egregore-state.json" ] && [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
-      ln -sf "$SCRIPT_DIR/.egregore-state.json" "$WT_PATH/.egregore-state.json"
-    fi
-    # .egregore/ dir
-    if [ ! -d "$WT_PATH/.egregore" ] && [ -d "$SCRIPT_DIR/.egregore" ]; then
-      ln -sf "$SCRIPT_DIR/.egregore" "$WT_PATH/.egregore"
-    fi
+if [ -n "$HOOK_SESSION_ID" ] && [ -f "/tmp/egregore-worktree-$HOOK_SESSION_ID" ]; then
+  WORKTREE_PATH=$(cat "/tmp/egregore-worktree-$HOOK_SESSION_ID" 2>/dev/null || true)
+  if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
+    IN_WORKTREE="true"
+    REPO_ROOT="$SCRIPT_DIR"
+    SCRIPT_DIR="$WORKTREE_PATH"
+    cd "$SCRIPT_DIR"
+    # Clean up signal file
+    rm -f "/tmp/egregore-worktree-$HOOK_SESSION_ID" 2>/dev/null || true
   fi
-done
+fi
 
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
