@@ -786,7 +786,7 @@ fi
 GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 
 BRANCH_STATUS="$BRANCH · synced"
-if [ "$IN_WORKTREE" = "true" ]; then
+if [ "$IN_WORKTREE" = "true" ] && [ "$BRANCH" != "worktree" ]; then
   BRANCH_STATUS="$BRANCH_STATUS · worktree"
 fi
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
