@@ -8,46 +8,37 @@ FRAMEWORK_VERSION="2"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-# --- Detect worktree mode ---
-# WorktreeCreate hook writes worktree path to session env directory.
-# Both hooks share the same session ID via CLAUDE_ENV_FILE.
+# --- Worktree mode ---
+# session-start.sh always runs from the main repo ($SCRIPT_DIR).
+# Claude Code creates worktrees natively with --worktree.
+# We fix symlinks for all active worktrees here (idempotent).
 IN_WORKTREE="false"
 REPO_ROOT="$SCRIPT_DIR"
-if [ -n "$CLAUDE_ENV_FILE" ]; then
-  SESSION_ENV_DIR=$(dirname "$CLAUDE_ENV_FILE")
-  if [ -f "$SESSION_ENV_DIR/worktree-path.txt" ]; then
-    WORKTREE_PATH=$(cat "$SESSION_ENV_DIR/worktree-path.txt" 2>/dev/null)
-    if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
-      IN_WORKTREE="true"
-      REPO_ROOT="$SCRIPT_DIR"
-      SCRIPT_DIR="$WORKTREE_PATH"
-      cd "$SCRIPT_DIR"
-    fi
-  fi
-fi
 
-# --- Fix symlinks in worktree (gitignored files don't exist in worktrees) ---
-if [ "$IN_WORKTREE" = "true" ]; then
-  # Memory symlink
-  if [ ! -L "$SCRIPT_DIR/memory" ] && [ -L "$REPO_ROOT/memory" ]; then
-    MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null || echo "")
-    if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
-      ln -sf "$MEMORY_TARGET" "$SCRIPT_DIR/memory"
+# Fix symlinks in all active worktrees (gitignored files don't exist in worktrees)
+for WT_PATH in $(git worktree list --porcelain 2>/dev/null | grep "^worktree " | sed 's/^worktree //' | grep ".claude/worktrees/" || true); do
+  if [ -d "$WT_PATH" ]; then
+    # Memory symlink
+    if [ ! -L "$WT_PATH/memory" ] && [ -L "$SCRIPT_DIR/memory" ]; then
+      MEMORY_TARGET=$(realpath "$SCRIPT_DIR/memory" 2>/dev/null || echo "")
+      if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
+        ln -sf "$MEMORY_TARGET" "$WT_PATH/memory"
+      fi
+    fi
+    # .env
+    if [ ! -f "$WT_PATH/.env" ] && [ -f "$SCRIPT_DIR/.env" ]; then
+      ln -sf "$SCRIPT_DIR/.env" "$WT_PATH/.env"
+    fi
+    # .egregore-state.json
+    if [ ! -f "$WT_PATH/.egregore-state.json" ] && [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
+      ln -sf "$SCRIPT_DIR/.egregore-state.json" "$WT_PATH/.egregore-state.json"
+    fi
+    # .egregore/ dir
+    if [ ! -d "$WT_PATH/.egregore" ] && [ -d "$SCRIPT_DIR/.egregore" ]; then
+      ln -sf "$SCRIPT_DIR/.egregore" "$WT_PATH/.egregore"
     fi
   fi
-  # .env
-  if [ ! -f "$SCRIPT_DIR/.env" ] && [ -f "$REPO_ROOT/.env" ]; then
-    ln -sf "$REPO_ROOT/.env" "$SCRIPT_DIR/.env"
-  fi
-  # .egregore-state.json
-  if [ ! -f "$SCRIPT_DIR/.egregore-state.json" ] && [ -f "$REPO_ROOT/.egregore-state.json" ]; then
-    ln -sf "$REPO_ROOT/.egregore-state.json" "$SCRIPT_DIR/.egregore-state.json"
-  fi
-  # .egregore/ dir
-  if [ ! -d "$SCRIPT_DIR/.egregore" ] && [ -d "$REPO_ROOT/.egregore" ]; then
-    ln -sf "$REPO_ROOT/.egregore" "$SCRIPT_DIR/.egregore"
-  fi
-fi
+done
 
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
