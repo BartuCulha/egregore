@@ -1,15 +1,5 @@
 Merge develop into main. Maintainer only.
 
-## Worktree guard
-
-Release must NOT run from a worktree. Check first:
-```bash
-if [ -f ".git" ] && ! [ -d ".git" ]; then
-  # In worktree — refuse
-fi
-```
-If in a worktree, tell the user: **"Release must run from the main repo, not a worktree session. Open a non-worktree session to release."** Stop here.
-
 ## What to do
 
 1. **Verify maintainer**: Only oz can release
