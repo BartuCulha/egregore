@@ -59,5 +59,23 @@ if [ -d "$REPO_ROOT/.egregore" ] && [ ! -d "$WORKTREE_DIR/.egregore" ]; then
   ln -sf "$REPO_ROOT/.egregore" "$WORKTREE_DIR/.egregore"
 fi
 
+# Signal the worktree path to SessionStart hook via session env directory
+# Both hooks share the same CLAUDE_ENV_FILE session directory
+if [ -n "$CLAUDE_ENV_FILE" ]; then
+  SESSION_ENV_DIR=$(dirname "$CLAUDE_ENV_FILE")
+  echo "$WORKTREE_DIR" > "$SESSION_ENV_DIR/worktree-path.txt" 2>/dev/null || true
+fi
+
+# DEBUG: capture hook environment (remove after testing)
+{
+  echo "=== WorktreeCreate Debug $(date) ==="
+  echo "CLAUDE_ENV_FILE=${CLAUDE_ENV_FILE:-unset}"
+  echo "WORKTREE_DIR=$WORKTREE_DIR"
+  echo "REPO_ROOT=$REPO_ROOT"
+  echo "NAME=$NAME"
+  env | grep -i claude || true
+  echo "=== End Debug ==="
+} >> /tmp/egregore-hook-debug.txt 2>&1
+
 # Print the absolute path (this is what Claude Code reads)
 echo "$WORKTREE_DIR"

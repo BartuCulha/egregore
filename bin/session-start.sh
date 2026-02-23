@@ -9,11 +9,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # --- Detect worktree mode ---
+# WorktreeCreate hook writes worktree path to session env directory.
+# Both hooks share the same session ID via CLAUDE_ENV_FILE.
 IN_WORKTREE="false"
 REPO_ROOT="$SCRIPT_DIR"
-if [ -f "$SCRIPT_DIR/.git" ] && ! [ -d "$SCRIPT_DIR/.git" ]; then
-  IN_WORKTREE="true"
-  REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+if [ -n "$CLAUDE_ENV_FILE" ]; then
+  SESSION_ENV_DIR=$(dirname "$CLAUDE_ENV_FILE")
+  if [ -f "$SESSION_ENV_DIR/worktree-path.txt" ]; then
+    WORKTREE_PATH=$(cat "$SESSION_ENV_DIR/worktree-path.txt" 2>/dev/null)
+    if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
+      IN_WORKTREE="true"
+      REPO_ROOT="$SCRIPT_DIR"
+      SCRIPT_DIR="$WORKTREE_PATH"
+      cd "$SCRIPT_DIR"
+    fi
+  fi
 fi
 
 # --- Fix symlinks in worktree (gitignored files don't exist in worktrees) ---
