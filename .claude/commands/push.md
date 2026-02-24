@@ -1,5 +1,11 @@
 Push current branch to remote.
 
+## Before anything else
+
+Check `git branch --show-current`. If on `develop`, `main`, or `master`:
+  → "You're on {branch}. Run /branch to create a working branch first."
+  → Stop. Do not push.
+
 ## What to do
 
 1. Push current branch to origin

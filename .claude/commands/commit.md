@@ -2,6 +2,12 @@ Stage changes and commit with a message.
 
 Message (optional): $ARGUMENTS
 
+## Before anything else
+
+Check `git branch --show-current`. If on `develop`, `main`, or `master`:
+  → "You're on {branch}. Run /branch to create a working branch first."
+  → Stop. Do not commit.
+
 ## What to do
 
 1. Show modified and untracked files
