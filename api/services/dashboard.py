@@ -18,7 +18,13 @@ async def _my_sessions(org: dict, me: str, time_range: str) -> dict:
         WHERE s.date >= date() - duration($timeRange)
         OPTIONAL MATCH (s)-[:INVOLVES]->(q:Quest)
         OPTIONAL MATCH (s)-[:HANDED_TO]->(target:Person)
-        RETURN s.id AS id, s.date AS date, s.topic AS topic, s.branch AS branch,
+        RETURN s.id AS id, s.date AS date,
+               COALESCE(s.topic,
+                 CASE WHEN s.branch IS NOT NULL AND NOT s.branch IN ['develop','main','master']
+                      AND s.branch CONTAINS '/'
+                   THEN replace(last(split(s.branch, '/')), '-', ' ')
+                   ELSE null END
+               ) AS topic, s.branch AS branch,
                s.status AS status, s.summary AS summary, s.startedAt AS startedAt,
                s.wrappedAt AS wrappedAt, target.name AS handedTo,
                collect(DISTINCT q.id) AS quests
@@ -114,7 +120,13 @@ async def _current_session(org: dict, session_id: str | None) -> dict:
         return {"fields": [], "values": []}
     return await execute_query(org, """
         MATCH (s:Session {id: $sessionId})
-        RETURN s.id AS id, s.status AS status, s.topic AS topic, s.branch AS branch
+        RETURN s.id AS id, s.status AS status,
+               COALESCE(s.topic,
+                 CASE WHEN s.branch IS NOT NULL AND NOT s.branch IN ['develop','main','master']
+                      AND s.branch CONTAINS '/'
+                   THEN replace(last(split(s.branch, '/')), '-', ' ')
+                   ELSE null END
+               ) AS topic, s.branch AS branch
     """, {"sessionId": session_id})
 
 
