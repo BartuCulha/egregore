@@ -84,7 +84,33 @@ else
   fail "resolve-handoffs with no args exits 0 — should be non-zero"
 fi
 
-# --- Test 9: record-focus with missing args exits non-zero ---
+# --- Test 9: set-topic with no session-id exits non-zero ---
+EXIT_CODE=0
+bash "$GRAPH_OP" set-topic 2>/dev/null || EXIT_CODE=$?
+if [ "$EXIT_CODE" -ne 0 ]; then
+  pass "set-topic with no args exits non-zero (exit $EXIT_CODE)"
+else
+  fail "set-topic with no args exits 0 — should be non-zero"
+fi
+
+# --- Test 10: set-topic with session-id but no topic exits non-zero ---
+EXIT_CODE=0
+bash "$GRAPH_OP" set-topic "test-sid" 2>/dev/null || EXIT_CODE=$?
+if [ "$EXIT_CODE" -ne 0 ]; then
+  pass "set-topic with no topic exits non-zero (exit $EXIT_CODE)"
+else
+  fail "set-topic with no topic exits 0 — should be non-zero"
+fi
+
+# --- Test 11: set-topic appears in operations list ---
+OUTPUT=$(bash "$GRAPH_OP" "fake-op" 2>&1 || true)
+if echo "$OUTPUT" | grep -q 'set-topic'; then
+  pass "set-topic listed in operations"
+else
+  fail "set-topic NOT listed in operations error message"
+fi
+
+# --- Test 12: record-focus with missing args exits non-zero ---
 EXIT_CODE=0
 bash "$GRAPH_OP" record-focus 2>/dev/null || EXIT_CODE=$?
 if [ "$EXIT_CODE" -ne 0 ]; then
@@ -93,7 +119,7 @@ else
   fail "record-focus with no args exits 0 — should be non-zero"
 fi
 
-# --- Test 10: graph.sh failure propagates ---
+# --- Test 13: graph.sh failure propagates ---
 # Create a fake graph.sh that always fails
 TMPDIR=$(mktemp -d)
 cat > "$TMPDIR/graph.sh" << 'EOF'
