@@ -507,7 +507,7 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
           fi
 
           if [ "$AUTO_CAPTURE" = "true" ]; then
-            SESSION_CYPHER="MATCH (p:Person) WHERE p.github = \$github OR toLower(p.name) = \$author
+            SESSION_CYPHER="MATCH (p:Person {github: \$github})
               MERGE (s:Session {id: \$sid})
               ON CREATE SET s.date = date(\$date), s.branch = \$branch,
                 s.startedAt = datetime(), s.status = 'active'
