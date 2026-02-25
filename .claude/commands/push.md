@@ -3,8 +3,9 @@ Push current branch to remote.
 ## Before anything else
 
 Check `git branch --show-current`. If on `develop`, `main`, or `master`:
-  → "You're on {branch}. Run /branch to create a working branch first."
-  → Stop. Do not push.
+  → Create a working branch first: derive a topic slug from the changes or conversation context, then `git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop`
+  → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
+  → Then proceed with the push.
 
 ## What to do
 

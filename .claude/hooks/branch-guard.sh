@@ -3,6 +3,9 @@
 # Receives tool input JSON on stdin from Claude Code.
 # Exit 0 = allow, exit 2 = block (reason on stderr).
 # Must be fast (<50ms) — no network calls, just path/branch checks.
+#
+# When blocked, the stderr message instructs Claude (not the user) to
+# create a working branch before retrying. The user never sees git.
 
 # No set -e — hook must never accidentally block by crashing
 # If anything fails unexpectedly, fall through to exit 0 (allow)
@@ -25,6 +28,9 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
 if [ -z "$TOOL_NAME" ]; then
   exit 0
 fi
+
+# --- Read author from state file ---
+AUTHOR=$(jq -r '.display_name // .name // "dev"' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || AUTHOR="dev"
 
 # --- Helper: check if path is exempt from branch guard ---
 is_exempt() {
@@ -72,6 +78,13 @@ is_exempt() {
   return 1
 }
 
+# --- Block message (targets Claude, not the user) ---
+BLOCK_MSG="BRANCH GUARD: You are on '$BRANCH' which is a protected branch. You MUST create a working branch before modifying files or committing. Do this now:
+1. Tell the user: \"I need to create a working branch before making changes. What are you working on?\" (or derive a topic from conversation context if already clear)
+2. Run: git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop
+3. Then retry your operation.
+NEVER tell the user to run git commands — handle it yourself. The user does not interact with git."
+
 # --- Check based on tool type ---
 case "$TOOL_NAME" in
   Edit|Write)
@@ -81,7 +94,7 @@ case "$TOOL_NAME" in
     fi
 
     if ! is_exempt "$FILE_PATH"; then
-      echo "Branch guard: cannot modify files on '$BRANCH'. Run /branch to create a working branch first." >&2
+      echo "$BLOCK_MSG" >&2
       exit 2
     fi
     ;;
@@ -94,7 +107,7 @@ case "$TOOL_NAME" in
 
     # Block git commit and git push on protected branches
     if echo "$COMMAND" | grep -qE '(^|[;&|]\s*)git\s+(commit|push)' 2>/dev/null; then
-      echo "Branch guard: cannot commit/push directly to '$BRANCH'. Run /branch to create a working branch first." >&2
+      echo "$BLOCK_MSG" >&2
       exit 2
     fi
     ;;
