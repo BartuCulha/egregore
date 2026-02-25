@@ -620,8 +620,8 @@ class TestClaudeMdInstruction:
         assert "graph-op.sh set-topic" in claude_md
 
     def test_session_id_from_file(self, claude_md):
-        """Instruction reads session ID from the session file."""
-        assert "session-*.id" in claude_md
+        """Instruction reads session ID from the project-local session file."""
+        assert ".egregore-session-id" in claude_md
 
 
 # =============================================================================

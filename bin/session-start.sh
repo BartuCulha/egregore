@@ -112,6 +112,8 @@ SESSION_ID_DIR="$HOME/.egregore"
 mkdir -p "$SESSION_ID_DIR"
 PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
 echo "$EGREGORE_SESSION_ID" > "$SESSION_ID_DIR/session-${PROJ_HASH}.id"
+# Also write project-local file (CLAUDE.md reads this — no glob needed)
+echo "$EGREGORE_SESSION_ID" > "$SCRIPT_DIR/.egregore-session-id"
 
 # --- Check onboarding state ---
 # If state file doesn't exist, assume onboarding complete (existing team member)
