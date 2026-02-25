@@ -41,7 +41,7 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 3. Confirm: `On dev/{author}/{slug} now.`
 4. Update the session in the graph (fire-and-forget, must not delay response):
    ```bash
-   bash bin/graph-op.sh set-topic "$(cat ~/.egregore/session-*.id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &
+   bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &
    ```
    Replace "topic from slug" with the slug words separated by spaces (e.g. `session-naming-bug` → `session naming bug`), and use the actual branch name.
 
