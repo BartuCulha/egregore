@@ -62,7 +62,13 @@ async def _my_sessions(org: dict, me: str) -> dict:
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person {name: $me})
         OPTIONAL MATCH (s)-[:HANDED_TO]->(target:Person)
-        RETURN s.date AS date, s.topic AS topic, s.id AS id,
+        RETURN s.date AS date,
+               COALESCE(s.topic,
+                 CASE WHEN s.branch IS NOT NULL AND NOT s.branch IN ['develop','main','master']
+                      AND s.branch CONTAINS '/'
+                   THEN replace(last(split(s.branch, '/')), '-', ' ')
+                   ELSE null END
+               ) AS topic, s.id AS id,
                s.filePath AS filePath, target.name AS handedTo
         ORDER BY s.date DESC, s.id DESC LIMIT 10
     """, {"me": me})
@@ -73,7 +79,13 @@ async def _team_sessions(org: dict, me: str) -> dict:
     return await execute_query(org, """
         MATCH (s:Session)-[:BY]->(p:Person)
         WHERE p.name <> $me AND date(left(toString(s.date), 10)) >= date() - duration('P7D')
-        RETURN s.date AS date, s.topic AS topic, p.name AS by
+        RETURN s.date AS date,
+               COALESCE(s.topic,
+                 CASE WHEN s.branch IS NOT NULL AND NOT s.branch IN ['develop','main','master']
+                      AND s.branch CONTAINS '/'
+                   THEN replace(last(split(s.branch, '/')), '-', ' ')
+                   ELSE null END
+               ) AS topic, p.name AS by
         ORDER BY s.date DESC LIMIT 5
     """, {"me": me})
 
