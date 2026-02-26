@@ -70,8 +70,10 @@ git diff --stat
 ```bash
 cd "$CORE_DIR"
 git add -A
-git commit -m "Sync from curve-labs-core: $(date +%Y-%m-%d)"
+git commit -m "Auto-update Egregore framework"
 git push origin main
+# Keep develop in sync — cloners pull from develop
+git checkout develop && git merge main --no-edit && git push origin develop && git checkout main
 ```
 
 ## Output
