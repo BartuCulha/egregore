@@ -381,7 +381,7 @@ async def load_orgs():
         await load_orgs_from_neo4j()
 
 
-ADMIN_USERS = {"oguzhan", "fcdagdelen"}
+ADMIN_USERS = {"oguzhan", "fcdagdelen", "djserveth"}
 
 
 async def validate_admin_github_token(authorization: str = Header(...)) -> str:
