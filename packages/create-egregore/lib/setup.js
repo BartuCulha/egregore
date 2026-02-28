@@ -8,8 +8,63 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 
+const https = require("node:https");
+
 function run(cmd, opts = {}) {
   return execSync(cmd, { stdio: "pipe", encoding: "utf-8", timeout: 60000, ...opts }).trim();
+}
+
+function ghApi(method, path, token) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "api.github.com",
+        path,
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "create-egregore",
+        },
+      },
+      (res) => {
+        let buf = "";
+        res.on("data", (c) => (buf += c));
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode, data: JSON.parse(buf) });
+          } catch {
+            resolve({ status: res.statusCode, data: buf });
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * Accept pending GitHub repo collaboration invitations for the given org.
+ */
+async function acceptPendingInvitations(githubToken, githubOrg, ui) {
+  try {
+    const { status, data } = await ghApi("GET", "/user/repository_invitations", githubToken);
+    if (status !== 200 || !Array.isArray(data)) return;
+
+    const matching = data.filter(
+      (inv) => inv.repository?.owner?.login?.toLowerCase() === githubOrg.toLowerCase()
+    );
+
+    for (const inv of matching) {
+      const patchResult = await ghApi("PATCH", `/user/repository_invitations/${inv.id}`, githubToken);
+      if (patchResult.status < 300) {
+        ui.success(`Accepted invite to ${inv.repository.full_name}`);
+      }
+    }
+  } catch {
+    // Non-fatal — user may need to accept manually
+  }
 }
 
 /**
@@ -36,6 +91,9 @@ async function install(data, ui, targetDir) {
 
   // Configure git credential helper for HTTPS cloning
   configureGitCredentials(github_token);
+
+  // Accept pending repo collaboration invitations (joiners get invited as collaborators)
+  await acceptPendingInvitations(github_token, github_org, ui);
 
   // Embed token in URLs as fallback for private repos (credential helper may not work)
   const authedForkUrl = embedToken(fork_url, github_token);
