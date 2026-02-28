@@ -852,13 +852,14 @@ fi
 if $HAS_JQ; then
   FORK_URL=$(echo "$RESPONSE" | jq -r '.fork_url')
   MEMORY_URL=$(echo "$RESPONSE" | jq -r '.memory_url')
-  GITHUB_TOKEN=$(echo "$RESPONSE" | jq -r '.github_token')
+  GITHUB_TOKEN=$(echo "$RESPONSE" | jq -r '.github_token // empty')
   ORG_NAME=$(echo "$RESPONSE" | jq -r '.org_name')
   GITHUB_ORG=$(echo "$RESPONSE" | jq -r '.github_org')
   API_KEY=$(echo "$RESPONSE" | jq -r '.api_key')
   API_URL=$(echo "$RESPONSE" | jq -r '.api_url')
   SLUG=$(echo "$RESPONSE" | jq -r '.slug')
   TELEGRAM_LINK=$(echo "$RESPONSE" | jq -r '.telegram_group_link // empty')
+  NEEDS_CLI_AUTH=$(echo "$RESPONSE" | jq -r '.needs_cli_auth // empty')
 else
   # Fallback: extract with grep/sed (works for simple JSON)
   extract() {{ echo "$RESPONSE" | grep -o "\\"$1\\":\\"[^\\"]*\\"" | head -1 | sed 's/.*:"//;s/"$//'; }}
@@ -871,6 +872,111 @@ else
   API_URL=$(extract api_url)
   SLUG=$(extract slug)
   TELEGRAM_LINK=$(extract telegram_group_link)
+  NEEDS_CLI_AUTH=$(echo "$RESPONSE" | grep -o '"needs_cli_auth":true' | head -1)
+fi
+
+# If no github_token (joiner flow), run device flow to get one
+if [ -z "$GITHUB_TOKEN" ] || [ "$NEEDS_CLI_AUTH" = "true" ]; then
+  echo "  Sign in with GitHub to complete setup."
+  echo ""
+
+  CLIENT_ID="Ov23lizB4nYEeIRsHTdb"
+  DEVICE_SCOPE="repo,read:org"
+
+  DEVICE_RESP=$(curl -s -X POST "https://github.com/login/device/code" \\
+    -H "Accept: application/json" \\
+    -d "client_id=$CLIENT_ID&scope=$DEVICE_SCOPE")
+
+  if $HAS_JQ; then
+    DEVICE_CODE=$(echo "$DEVICE_RESP" | jq -r '.device_code')
+    USER_CODE=$(echo "$DEVICE_RESP" | jq -r '.user_code')
+    VERIFY_URL=$(echo "$DEVICE_RESP" | jq -r '.verification_uri_complete // .verification_uri')
+    POLL_INTERVAL=$(echo "$DEVICE_RESP" | jq -r '.interval')
+  else
+    DEVICE_CODE=$(echo "$DEVICE_RESP" | grep -o '"device_code":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+    USER_CODE=$(echo "$DEVICE_RESP" | grep -o '"user_code":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+    VERIFY_URL=$(echo "$DEVICE_RESP" | grep -o '"verification_uri_complete":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+    [ -z "$VERIFY_URL" ] && VERIFY_URL=$(echo "$DEVICE_RESP" | grep -o '"verification_uri":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+    POLL_INTERVAL=$(echo "$DEVICE_RESP" | grep -o '"interval":[0-9]*' | head -1 | sed 's/.*://')
+  fi
+
+  if [ -z "$DEVICE_CODE" ] || [ "$DEVICE_CODE" = "null" ]; then
+    echo "  Error: Failed to start GitHub device flow."
+    exit 1
+  fi
+
+  # Copy code to clipboard and open browser
+  if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$USER_CODE" | pbcopy
+    echo "  Code copied to clipboard: $USER_CODE"
+  else
+    echo "  Your code: $USER_CODE"
+  fi
+  echo "  Opening browser — paste the code and authorize."
+  echo ""
+
+  if command -v open >/dev/null 2>&1; then
+    open "$VERIFY_URL"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$VERIFY_URL"
+  else
+    echo "  Open this URL manually: $VERIFY_URL"
+  fi
+
+  # Poll for token
+  POLL_INTERVAL=${{POLL_INTERVAL:-5}}
+  ELAPSED=0
+  TIMEOUT=300
+  while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+    sleep "$POLL_INTERVAL"
+    ELAPSED=$((ELAPSED + POLL_INTERVAL))
+
+    TOKEN_RESP=$(curl -s -X POST "https://github.com/login/oauth/access_token" \\
+      -H "Accept: application/json" \\
+      -d "client_id=$CLIENT_ID&device_code=$DEVICE_CODE&grant_type=urn:ietf:params:oauth:grant-type:device_code")
+
+    if $HAS_JQ; then
+      GITHUB_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.access_token // empty')
+      TOKEN_ERROR=$(echo "$TOKEN_RESP" | jq -r '.error // empty')
+    else
+      GITHUB_TOKEN=$(echo "$TOKEN_RESP" | grep -o '"access_token":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+      TOKEN_ERROR=$(echo "$TOKEN_RESP" | grep -o '"error":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+    fi
+
+    if [ -n "$GITHUB_TOKEN" ]; then
+      echo "  Authorized!"
+      break
+    fi
+
+    case "$TOKEN_ERROR" in
+      authorization_pending) continue ;;
+      slow_down) POLL_INTERVAL=$((POLL_INTERVAL + 5)) ;;
+      *)
+        echo "  Authorization failed: $TOKEN_ERROR"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [ -z "$GITHUB_TOKEN" ]; then
+    echo "  Timed out waiting for authorization."
+    exit 1
+  fi
+
+  # Accept pending repo collaboration invitations
+  echo ""
+  echo "  Accepting repository invitations..."
+  INVITATIONS=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\
+    "https://api.github.com/user/repository_invitations" 2>/dev/null || echo "[]")
+
+  if $HAS_JQ; then
+    echo "$INVITATIONS" | jq -r --arg org "$GITHUB_ORG" \\
+      '.[] | select(.repository.owner.login == $org) | .id' 2>/dev/null | while read -r INV_ID; do
+      curl -s -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\
+        "https://api.github.com/user/repository_invitations/$INV_ID" >/dev/null 2>&1
+      echo "  Accepted invitation #$INV_ID"
+    done
+  fi
 fi
 
 DIR_SLUG=$(echo "$GITHUB_ORG" | tr '[:upper:]' '[:lower:]')
@@ -1444,13 +1550,6 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
         # Personal account: inviter must be the repo owner
         if inviter["login"].lower() != owner.lower():
             raise HTTPException(status_code=403, detail="Only the account owner can invite.")
-        # Add as collaborator on egregore repo
-        collab_ok = await gh.add_repo_collaborator(token, owner, body.repo_name, body.github_username)
-        if collab_ok:
-            github_result = {"status": "collaborator_invited"}
-        else:
-            logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{body.repo_name}")
-            github_result = {"status": "collaborator_failed", "reason": "Check token scopes (needs 'repo')"}
     else:
         # Org account: inviter must be admin
         role = await gh.get_org_membership(token, owner)
@@ -1459,7 +1558,14 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
                 status_code=403,
                 detail="Only org admins can invite. Ask an admin to send the invite.",
             )
-        github_result = await gh.invite_to_org(token, owner, body.github_username)
+
+    # Add as collaborator on the egregore repo (works for both personal and org accounts)
+    collab_ok = await gh.add_repo_collaborator(token, owner, body.repo_name, body.github_username)
+    if collab_ok:
+        github_result = {"status": "collaborator_invited"}
+    else:
+        logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{body.repo_name}")
+        github_result = {"status": "collaborator_failed", "reason": "Check token scopes (needs 'repo')"}
 
     # Read org config for the invite token
     config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
@@ -1477,22 +1583,21 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
             detail="egregore.json is missing 'slug' field. Org setup may be incomplete.",
         )
 
-        # Add as collaborator on the memory repo
-        memory_repo = config.get("memory_repo", f"{owner}-memory")
-        if "/" in memory_repo:
-            memory_repo_name = memory_repo.split("/")[-1].replace(".git", "")
-        else:
-            memory_repo_name = memory_repo
-        mem_ok = await gh.add_repo_collaborator(token, owner, memory_repo_name, body.github_username)
-        if not mem_ok:
-            logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{memory_repo_name}")
+    # Add as collaborator on the memory repo
+    memory_repo = config.get("memory_repo", f"{owner}-memory")
+    if "/" in memory_repo:
+        memory_repo_name = memory_repo.split("/")[-1].replace(".git", "")
+    else:
+        memory_repo_name = memory_repo
+    mem_ok = await gh.add_repo_collaborator(token, owner, memory_repo_name, body.github_username)
+    if not mem_ok:
+        logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{memory_repo_name}")
 
-        # Add as collaborator on managed repos
-        if is_personal:
-            for repo_name in repos:
-                repo_ok = await gh.add_repo_collaborator(token, owner, repo_name, body.github_username)
-                if not repo_ok:
-                    logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{repo_name}")
+    # Add as collaborator on managed repos
+    for repo_name in repos:
+        repo_ok = await gh.add_repo_collaborator(token, owner, repo_name, body.github_username)
+        if not repo_ok:
+            logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{repo_name}")
 
     # Create invite token (7-day TTL)
     site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
@@ -1536,7 +1641,10 @@ async def org_invite_info(token: str):
 
 @app.post("/api/org/invite/{invite_token}/accept")
 async def org_invite_accept(invite_token: str, authorization: str = Header(...)):
-    """Accept an invite. Invitee authenticates, we verify org membership and set them up."""
+    """Accept an invite. Verifies invitee identity, registers them, returns setup token.
+
+    The invitee only needs read:user scope — repo access is deferred to CLI device flow.
+    """
     token = authorization.replace("Bearer ", "").strip()
 
     # Validate invite token (peek, don't consume yet)
@@ -1544,6 +1652,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     if not invite_data:
         raise HTTPException(status_code=404, detail="Invite expired or invalid")
 
+    # Verify invitee identity (works with read:user scope)
     try:
         user = await gh.get_user(token)
     except ValueError:
@@ -1556,93 +1665,37 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
             status_code=400,
             detail="Invite token is missing 'slug'. It may have been created before slug was added to invites. Ask the admin to send a new invite.",
         )
-    is_personal = invite_data.get("is_personal", False)
 
-    if is_personal:
-        is_owner = user["login"].lower() == owner.lower()
-
-        if not is_owner:
-            # Invitee (not the repo owner): accept pending repo collaboration invitations
-            accepted = await gh.accept_repo_invitations(token, owner)
-
-            # Verify access to the egregore repo
-            repo_name = invite_data.get("repo_name", "egregore-core")
-            has_egregore_access = await gh.repo_exists(token, owner, repo_name)
-
-            if not has_egregore_access:
-                return {
-                    "status": "pending_github",
-                    "message": f"Waiting for access to: {repo_name}. Retrying automatically...",
-                    "github_org": owner,
-                }
-
-            # Verify access to memory repo
-            memory_repo_name = f"{owner}-memory"
-            try:
-                config_raw = await gh.get_file_content(token, owner, repo_name, "egregore.json")
-                if config_raw:
-                    _cfg = json.loads(config_raw)
-                    _mem = _cfg.get("memory_repo", memory_repo_name)
-                    if "/" in _mem:
-                        memory_repo_name = _mem.split("/")[-1].replace(".git", "")
-                    else:
-                        memory_repo_name = _mem
-            except Exception:
-                pass
-
-            has_memory_access = await gh.repo_exists(token, owner, memory_repo_name)
-            if not has_memory_access:
-                # Check if repo exists at all (using GitHub's unauthenticated check)
-                # If even the API returns 404 for this repo, it was never created
-                logger.warning(
-                    f"Memory repo {owner}/{memory_repo_name} not accessible by invitee. "
-                    f"It may not exist or the collaboration invite is pending."
-                )
-                return {
-                    "status": "pending_github",
-                    "message": f"Waiting for access to: {memory_repo_name}. "
-                               f"If this persists, the repo may not exist — ask {owner} to re-run setup.",
-                    "github_org": owner,
-                }
-    else:
-        # Org account: check org membership — auto-accept if pending
-        membership = await gh.check_org_membership(token, owner, user["login"])
-
-        if membership == "pending":
-            accepted = await gh.accept_org_invitation(token, owner)
-            if accepted:
-                membership = "active"
-            else:
-                return {
-                    "status": "error",
-                    "message": "Could not accept the org invitation. Try again or accept it manually on GitHub.",
-                    "github_org": owner,
-                }
-
-        if membership == "none":
-            return {
-                "status": "pending_github",
-                "message": "The org invitation hasn't arrived yet. Try again in a moment.",
-                "github_org": owner,
-            }
-
-    # Access verified — proceed with Egregore join
-    # Read egregore.json from repo (use repo_name from invite data, default to egregore-core)
+    # Build config from invite data — invitee may not have repo access yet (expected)
     invite_repo_name = invite_data.get("repo_name", "egregore-core")
-    config_raw = await gh.get_file_content(token, owner, invite_repo_name, "egregore.json")
-    if not config_raw:
-        raise HTTPException(status_code=404, detail="egregore.json not found in repo")
+    repos = invite_data.get("repos", [])
 
-    config = json.loads(config_raw)
-    memory_repo = config.get("memory_repo", f"{owner}-memory")
-    if memory_repo.startswith("http"):
+    # Try to read egregore.json from repo (may fail if invitee hasn't accepted collab invite yet)
+    config = None
+    try:
+        config_raw = await gh.get_file_content(token, owner, invite_repo_name, "egregore.json")
+        if config_raw:
+            config = json.loads(config_raw)
+    except Exception:
+        pass
+
+    # Build URLs — fall back to invite data if we can't read the repo
+    if config:
+        memory_repo = config.get("memory_repo", f"{owner}-memory")
+        api_url = config.get("api_url", "")
+        org_name = config.get("org_name", owner)
+        repos = config.get("repos", repos)
+    else:
+        memory_repo = invite_data.get("memory_repo", f"{owner}-memory")
+        api_url = ""
+        org_name = invite_data.get("org_name", owner)
+
+    if isinstance(memory_repo, str) and memory_repo.startswith("http"):
         memory_url = memory_repo
     else:
         memory_url = f"https://github.com/{owner}/{memory_repo}.git"
 
     fork_url = f"https://github.com/{owner}/{invite_repo_name}.git"
-    api_url = config.get("api_url", "")
-    repos = config.get("repos", [])
 
     org_config = ORG_CONFIGS.get(slug)
 
@@ -1667,20 +1720,20 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     # Get API key from server config (not from egregore.json — secrets don't go in git)
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
-    # Generate setup token for npx installer
+    # Generate setup token WITHOUT github_token — CLI will run device flow for repo-scoped auth
     setup_token = create_token({
         "fork_url": fork_url,
         "memory_url": memory_url,
         "api_key": api_key,
         "api_url": api_url,
-        "org_name": config.get("org_name", owner),
+        "org_name": org_name,
         "github_org": owner,
-        "github_token": token,
         "github_username": user["login"],
         "github_name": user.get("name", user["login"]),
         "slug": slug,
         "repos": repos,
         "repo_name": invite_repo_name,
+        "needs_cli_auth": True,
     })
 
     # Generate Telegram group invite link for the new member
@@ -1694,7 +1747,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         "fork_url": fork_url,
         "memory_url": memory_url,
         "org_slug": slug,
-        "org_name": config.get("org_name", owner),
+        "org_name": org_name,
         "telegram_group_link": telegram_group_link,
     }
 

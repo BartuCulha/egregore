@@ -81,6 +81,18 @@ async function tokenFlow(api, token) {
     process.exit(1);
   }
 
+  // Joiner tokens don't include a github_token — run device flow to get one
+  if (!data.github_token || data.needs_cli_auth) {
+    ui.info("\nSign in with GitHub to complete setup.\n");
+    try {
+      data.github_token = await deviceFlow(ui);
+      ui.success("Authenticated with GitHub");
+    } catch (err) {
+      ui.error(`GitHub auth failed: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
   try {
     await install(data, ui);
   } catch (err) {
