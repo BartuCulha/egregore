@@ -166,15 +166,10 @@ async def load_orgs_from_neo4j():
             "slug": "__system__",
         }
     else:
-        # Fallback: use any org with neo4j_host (e.g. curvelabs)
-        seed_org = None
-        for slug, org in ORG_CONFIGS.items():
-            if org.get("neo4j_host"):
-                seed_org = {**org, "slug": slug}
-                break
-        if not seed_org:
-            logger.info("No Neo4j connection available — skipping org reload")
-            return
+        # EGREGORE_NEO4J_HOST is required for customer org loading.
+        # Never fall back to CL's private instance (NEO4J_HOST) — that would leak.
+        logger.warning("EGREGORE_NEO4J_HOST not set — skipping customer org reload")
+        return
 
     from .services.graph import execute_system_query
 
