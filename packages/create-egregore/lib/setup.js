@@ -317,11 +317,16 @@ async function installShellAlias(egregoreDir, ui) {
       defaultName = slug ? `egregore-${slug}` : "egregore-2";
     }
 
-    // Ask user
-    console.log("");
-    ui.info(`This instance will be launched with a shell command.`);
-    const answer = await ui.prompt(`Command name (Enter for ${ui.bold(defaultName)}):`);
-    const aliasName = answer || defaultName;
+    // Ask user (skip prompt in non-interactive mode)
+    let aliasName;
+    if (process.stdin.isTTY) {
+      console.log("");
+      ui.info(`This instance will be launched with a shell command.`);
+      const answer = await ui.prompt(`Command name (Enter for ${ui.bold(defaultName)}):`);
+      aliasName = answer || defaultName;
+    } else {
+      aliasName = defaultName;
+    }
 
     // Remove old alias for this directory
     let lines = profileContent.split("\n");

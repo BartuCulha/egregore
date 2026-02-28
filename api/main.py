@@ -344,6 +344,11 @@ async def org_register(body: OrgRegister, authorization: str = Header(...)):
     default_neo4j_host = os.environ.get("EGREGORE_NEO4J_HOST", "")
     default_neo4j_user = os.environ.get("EGREGORE_NEO4J_USER", "neo4j")
     default_neo4j_password = os.environ.get("EGREGORE_NEO4J_PASSWORD", "")
+    if not default_neo4j_host:
+        raise HTTPException(
+            status_code=503,
+            detail="EGREGORE_NEO4J_HOST not configured. Cannot create org without a database.",
+        )
     default_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
     new_org = {
@@ -563,6 +568,11 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
     default_neo4j_host = os.environ.get("EGREGORE_NEO4J_HOST", "")
     default_neo4j_user = os.environ.get("EGREGORE_NEO4J_USER", "neo4j")
     default_neo4j_password = os.environ.get("EGREGORE_NEO4J_PASSWORD", "")
+    if not default_neo4j_host:
+        raise HTTPException(
+            status_code=503,
+            detail="EGREGORE_NEO4J_HOST not configured. Cannot create org without a database.",
+        )
     default_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
     new_org = {
