@@ -1881,11 +1881,28 @@ async def remove_member(
 
     # --- Validate target ---
     target_membership = sb.get_membership_by_username(slug, username)
+    graph_only = False
+
     if not target_membership or target_membership.get("status") != "active":
-        raise HTTPException(status_code=404, detail=f"No active membership found for '{username}' in org '{slug}'")
+        # Check if the user exists as a graph-only Person node (no Supabase membership)
+        org_config = ORG_CONFIGS.get(slug)
+        if org_config and mode == "full":
+            try:
+                result = await execute_query(org_config, """
+                    MATCH (p:Person {name: $name}) RETURN p.name AS name
+                """, {"name": username})
+                has_node = bool(result.get("values") and result["values"][0][0])
+            except Exception:
+                has_node = False
+            if has_node:
+                graph_only = True
+            else:
+                raise HTTPException(status_code=404, detail=f"No active membership or graph node found for '{username}' in org '{slug}'")
+        else:
+            raise HTTPException(status_code=404, detail=f"No active membership found for '{username}' in org '{slug}'")
 
     # --- Cannot remove an admin ---
-    if target_membership.get("role") == "admin":
+    if target_membership and target_membership.get("role") == "admin":
         raise HTTPException(status_code=400, detail="Cannot remove an admin. Change their role first.")
 
     # --- Cannot remove yourself ---
@@ -1894,37 +1911,40 @@ async def remove_member(
 
     actions = []
     errors = []
-
-    # --- Step 1: Revoke GitHub access ---
     org_config = ORG_CONFIGS.get(slug)
-    try:
-        org_data = sb.get_org_by_slug(slug)
-        if org_data:
-            github_org = org_data.get("github_org", "")
-            if github_org:
-                repos_to_remove = ["egregore-core", f"{slug}-memory"]
-                if org_config:
-                    for repo_name in org_config.get("repos", []):
-                        repos_to_remove.append(repo_name)
 
-                removed_count = 0
-                for repo in repos_to_remove:
-                    try:
-                        ok = await gh.remove_repo_collaborator(github_token, github_org, repo, username)
-                        if ok:
-                            removed_count += 1
-                    except Exception:
-                        pass
-                actions.append(f"GitHub: removed from {removed_count}/{len(repos_to_remove)} repos")
-    except Exception as e:
-        errors.append(f"GitHub access revocation failed: {str(e)}")
+    if not graph_only:
+        # --- Step 1: Revoke GitHub access ---
+        try:
+            org_data = sb.get_org_by_slug(slug)
+            if org_data:
+                github_org = org_data.get("github_org", "")
+                if github_org:
+                    repos_to_remove = ["egregore-core", f"{slug}-memory"]
+                    if org_config:
+                        for repo_name in org_config.get("repos", []):
+                            repos_to_remove.append(repo_name)
 
-    # --- Step 2: Deactivate in Supabase ---
-    try:
-        sb.remove_membership(slug, username)
-        actions.append("Supabase: membership status set to 'removed'")
-    except Exception as e:
-        errors.append(f"Supabase membership removal failed: {str(e)}")
+                    removed_count = 0
+                    for repo in repos_to_remove:
+                        try:
+                            ok = await gh.remove_repo_collaborator(github_token, github_org, repo, username)
+                            if ok:
+                                removed_count += 1
+                        except Exception:
+                            pass
+                    actions.append(f"GitHub: removed from {removed_count}/{len(repos_to_remove)} repos")
+        except Exception as e:
+            errors.append(f"GitHub access revocation failed: {str(e)}")
+
+        # --- Step 2: Deactivate in Supabase ---
+        try:
+            sb.remove_membership(slug, username)
+            actions.append("Supabase: membership status set to 'removed'")
+        except Exception as e:
+            errors.append(f"Supabase membership removal failed: {str(e)}")
+    else:
+        actions.append("Graph-only node (no Supabase membership)")
 
     # --- Step 3: Mode-specific cleanup ---
     if mode == "full":
