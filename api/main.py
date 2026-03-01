@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import (
     validate_api_key, validate_admin_github_token, validate_github_token,
     generate_api_key,
-    reload_configs, ORG_CONFIGS,
+    reload_configs, ORG_CONFIGS, ADMIN_USERS,
     load_orgs_from_neo4j, load_orgs, exchange_github_code, GITHUB_CLIENT_ID,
     USE_SUPABASE,
 )
@@ -29,7 +29,7 @@ from .models import (
     GraphQuery, GraphBatch, NotifySend, NotifyGroup, OrgRegister,
     OrgSetup, OrgJoin, OrgTelegram, GitHubCallback, SetupOrgsResponse,
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
-    WaitlistAdd, WaitlistApprove, HealthCheckin,
+    WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -1846,6 +1846,160 @@ async def org_members(slug: str, org: dict = Depends(validate_api_key)):
         }
 
     return {"org_slug": slug, "members": []}
+
+
+@app.delete("/api/org/{slug}/members/{username}", response_model=RemoveMemberResponse)
+async def remove_member(
+    slug: str,
+    username: str,
+    mode: str = Query("revoke", pattern="^(revoke|full)$"),
+    authorization: str = Header(...),
+):
+    """Remove a member from an org.
+
+    Auth: GitHub token. Caller must be org admin (Supabase membership) or platform admin (ADMIN_USERS).
+    Modes:
+      - revoke: kill access, keep contributions (Person node marked status='removed')
+      - full: revoke + erase data from Neo4j and memory
+    """
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Member management requires Supabase")
+
+    # Validate caller's GitHub token
+    github_username = await validate_github_token(authorization)
+    github_token = authorization.replace("Bearer ", "").strip()
+
+    from .services import supabase as sb
+
+    # --- Auth: caller must be org admin or platform admin ---
+    is_platform_admin = github_username.lower() in {u.lower() for u in ADMIN_USERS}
+    caller_membership = sb.get_membership_by_username(slug, github_username)
+    is_org_admin = caller_membership and caller_membership.get("role") == "admin" and caller_membership.get("status") == "active"
+
+    if not is_platform_admin and not is_org_admin:
+        raise HTTPException(status_code=403, detail="Only org admins or platform admins can remove members")
+
+    # --- Validate target ---
+    target_membership = sb.get_membership_by_username(slug, username)
+    if not target_membership or target_membership.get("status") != "active":
+        raise HTTPException(status_code=404, detail=f"No active membership found for '{username}' in org '{slug}'")
+
+    # --- Cannot remove an admin ---
+    if target_membership.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="Cannot remove an admin. Change their role first.")
+
+    # --- Cannot remove yourself ---
+    if username.lower() == github_username.lower():
+        raise HTTPException(status_code=400, detail="Cannot remove yourself")
+
+    actions = []
+    errors = []
+
+    # --- Step 1: Revoke GitHub access ---
+    org_config = ORG_CONFIGS.get(slug)
+    try:
+        org_data = sb.get_org_by_slug(slug)
+        if org_data:
+            github_org = org_data.get("github_org", "")
+            if github_org:
+                repos_to_remove = ["egregore-core", f"{slug}-memory"]
+                if org_config:
+                    for repo_name in org_config.get("repos", []):
+                        repos_to_remove.append(repo_name)
+
+                removed_count = 0
+                for repo in repos_to_remove:
+                    try:
+                        ok = await gh.remove_repo_collaborator(github_token, github_org, repo, username)
+                        if ok:
+                            removed_count += 1
+                    except Exception:
+                        pass
+                actions.append(f"GitHub: removed from {removed_count}/{len(repos_to_remove)} repos")
+    except Exception as e:
+        errors.append(f"GitHub access revocation failed: {str(e)}")
+
+    # --- Step 2: Deactivate in Supabase ---
+    try:
+        sb.remove_membership(slug, username)
+        actions.append("Supabase: membership status set to 'removed'")
+    except Exception as e:
+        errors.append(f"Supabase membership removal failed: {str(e)}")
+
+    # --- Step 3: Mode-specific cleanup ---
+    if mode == "full":
+        # Delete telemetry data
+        try:
+            deleted = sb.delete_user_telemetry(slug, username)
+            actions.append(f"Supabase: deleted {deleted['telemetry_events']} telemetry events, {deleted['health_checkins']} health checkins")
+        except Exception as e:
+            errors.append(f"Telemetry deletion failed: {str(e)}")
+
+        # Neo4j: delete Person node and authored data
+        if org_config:
+            try:
+                # Delete sessions authored by this person
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})-[:BY]->(s:Session)
+                    DETACH DELETE s
+                """, {"name": username})
+                actions.append("Neo4j: deleted sessions")
+
+                # Orphan artifacts (remove CONTRIBUTED_BY but keep artifacts)
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})-[r:CONTRIBUTED_BY]-()
+                    DELETE r
+                """, {"name": username})
+                actions.append("Neo4j: removed contribution relationships")
+
+                # Orphan quests (remove STARTED_BY but keep quests)
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})-[r:STARTED_BY]-()
+                    DELETE r
+                """, {"name": username})
+                actions.append("Neo4j: removed quest ownership")
+
+                # Delete todos
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})-[:BY]->(t:Todo)
+                    DETACH DELETE t
+                """, {"name": username})
+                actions.append("Neo4j: deleted todos")
+
+                # Delete question sets
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})-[r:ASKED_BY]->(q)
+                    DETACH DELETE q
+                """, {"name": username})
+
+                # Delete the Person node itself
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})
+                    DETACH DELETE p
+                """, {"name": username})
+                actions.append("Neo4j: deleted Person node")
+            except Exception as e:
+                errors.append(f"Neo4j cleanup failed: {str(e)}")
+    else:
+        # mode == "revoke": mark Person node as removed
+        if org_config:
+            try:
+                await execute_query(org_config, """
+                    MATCH (p:Person {name: $name})
+                    SET p.status = 'removed', p.removedAt = datetime()
+                """, {"name": username})
+                actions.append("Neo4j: Person node marked as removed")
+            except Exception as e:
+                errors.append(f"Neo4j status update failed: {str(e)}")
+
+    status = "removed" if not errors else "removed"  # partial success still counts
+    return RemoveMemberResponse(
+        status=status,
+        mode=mode,
+        username=username,
+        actions=actions,
+        errors=errors,
+    )
 
 
 @app.post("/api/admin/waitlist")

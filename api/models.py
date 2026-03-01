@@ -138,6 +138,15 @@ class WaitlistApprove(BaseModel):
     waitlist_id: int
 
 
+class RemoveMemberResponse(BaseModel):
+    """Response from removing a member."""
+    status: str  # "removed" or "error"
+    mode: str  # "revoke" or "full"
+    username: str
+    actions: list[str] = []  # summary of what was done
+    errors: list[str] = []  # non-fatal errors
+
+
 class HealthCheckin(BaseModel):
     """Health check-in from a client session at startup."""
     org_slug: str
