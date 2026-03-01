@@ -405,6 +405,87 @@ def add_membership(
     return result.data[0] if result.data else data
 
 
+def remove_membership(org_slug: str, github_username: str) -> bool:
+    """Set membership status to 'removed'. Preserves the row for audit trail."""
+    user = get_user_by_github(github_username)
+    if not user:
+        return False
+    result = (
+        get_client()
+        .table("memberships")
+        .update({
+            "status": "removed",
+            "removed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("org_slug", org_slug)
+        .eq("user_id", user["id"])
+        .execute()
+    )
+    return bool(result.data)
+
+
+def delete_user_telemetry(org_slug: str, github_username: str) -> dict:
+    """Delete telemetry and health_checkin rows for a user in an org.
+    Returns counts of deleted rows."""
+    deleted = {"telemetry_events": 0, "health_checkins": 0}
+    try:
+        result = (
+            get_client()
+            .table("telemetry_events")
+            .delete()
+            .eq("org_slug", org_slug)
+            .eq("user_handle", github_username)
+            .execute()
+        )
+        deleted["telemetry_events"] = len(result.data) if result.data else 0
+    except Exception as e:
+        logger.warning(f"Failed to delete telemetry for {github_username}: {e}")
+    try:
+        result = (
+            get_client()
+            .table("health_checkins")
+            .delete()
+            .eq("org_slug", org_slug)
+            .eq("github_username", github_username)
+            .execute()
+        )
+        deleted["health_checkins"] = len(result.data) if result.data else 0
+    except Exception as e:
+        logger.warning(f"Failed to delete health checkins for {github_username}: {e}")
+    return deleted
+
+
+def get_admin_count(org_slug: str) -> int:
+    """Count active admins for an org."""
+    result = (
+        get_client()
+        .table("memberships")
+        .select("id", count="exact")
+        .eq("org_slug", org_slug)
+        .eq("role", "admin")
+        .eq("status", "active")
+        .execute()
+    )
+    return result.count if result.count is not None else 0
+
+
+def get_membership_by_username(org_slug: str, github_username: str) -> Optional[dict]:
+    """Get a specific membership by org slug and GitHub username."""
+    user = get_user_by_github(github_username)
+    if not user:
+        return None
+    result = (
+        get_client()
+        .table("memberships")
+        .select("*, users!memberships_user_id_fkey(github_username, github_name)")
+        .eq("org_slug", org_slug)
+        .eq("user_id", user["id"])
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
 # =============================================================================
 # WAITLIST OPERATIONS
 # =============================================================================
