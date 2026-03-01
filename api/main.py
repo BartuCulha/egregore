@@ -1888,7 +1888,7 @@ async def remove_member(
         org_config = ORG_CONFIGS.get(slug)
         if org_config and mode == "full":
             try:
-                result = await execute_query(org_config, """
+                result = await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name}) RETURN p.name AS name
                 """, {"name": username})
                 has_node = bool(result.get("values") and result["values"][0][0])
