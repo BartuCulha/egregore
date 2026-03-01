@@ -1956,44 +1956,39 @@ async def remove_member(
             errors.append(f"Telemetry deletion failed: {str(e)}")
 
         # Neo4j: delete Person node and authored data
+        # Uses execute_system_query to bypass the append-only guard
         if org_config:
             try:
-                # Delete sessions authored by this person
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})-[:BY]->(s:Session)
                     DETACH DELETE s
                 """, {"name": username})
                 actions.append("Neo4j: deleted sessions")
 
-                # Orphan artifacts (remove CONTRIBUTED_BY but keep artifacts)
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})-[r:CONTRIBUTED_BY]-()
                     DELETE r
                 """, {"name": username})
                 actions.append("Neo4j: removed contribution relationships")
 
-                # Orphan quests (remove STARTED_BY but keep quests)
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})-[r:STARTED_BY]-()
                     DELETE r
                 """, {"name": username})
                 actions.append("Neo4j: removed quest ownership")
 
-                # Delete todos
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})-[:BY]->(t:Todo)
                     DETACH DELETE t
                 """, {"name": username})
                 actions.append("Neo4j: deleted todos")
 
-                # Delete question sets
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})-[r:ASKED_BY]->(q)
                     DETACH DELETE q
                 """, {"name": username})
 
-                # Delete the Person node itself
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})
                     DETACH DELETE p
                 """, {"name": username})
@@ -2004,7 +1999,7 @@ async def remove_member(
         # mode == "revoke": mark Person node as removed
         if org_config:
             try:
-                await execute_query(org_config, """
+                await execute_system_query(org_config, """
                     MATCH (p:Person {name: $name})
                     SET p.status = 'removed', p.removedAt = datetime()
                 """, {"name": username})
