@@ -442,6 +442,23 @@ async def add_repo_collaborator(token: str, owner: str, repo: str, username: str
     return False
 
 
+async def remove_repo_collaborator(token: str, owner: str, repo: str, username: str) -> bool:
+    """Remove a user as a collaborator from a repo. Returns True if successful (or already removed)."""
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await client.delete(
+            f"{API_BASE}/repos/{owner}/{repo}/collaborators/{username}",
+            headers=_headers(token),
+            timeout=10.0,
+        )
+    if resp.status_code in (204, 404):
+        return True
+    logger.warning(
+        f"remove_repo_collaborator {owner}/{repo} -> {username}: "
+        f"HTTP {resp.status_code} {resp.text[:200]}"
+    )
+    return False
+
+
 async def accept_org_invitation(token: str, org: str) -> bool:
     """Accept a pending org invitation on behalf of the authenticated user.
     Uses PATCH /user/memberships/orgs/{org} with state=active."""

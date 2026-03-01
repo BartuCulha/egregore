@@ -74,3 +74,7 @@ export async function updateUserProfile(token, { telegram_username }) {
 export async function joinWaitlist(name, email) {
   return request("POST", "/api/admin/waitlist", { body: { name, email, source: "website" } });
 }
+
+export async function removeMember(token, slug, username, mode = "revoke") {
+  return request("DELETE", `/api/org/${encodeURIComponent(slug)}/members/${encodeURIComponent(username)}?mode=${mode}`, { token });
+}
