@@ -44,14 +44,21 @@ def _cloud_init_script(
 ) -> str:
     """Generate cloud-init script that installs Coder + Egregore template on a fresh VPS."""
     return f"""#!/bin/bash
-set -euo pipefail
+set -eo pipefail
+
+exec > /var/log/egregore-init.log 2>&1
+echo "=== Egregore cloud-init started at $(date) ==="
 
 # ─── System setup ────────────────────────────────────────────────
 apt-get update
-apt-get install -y docker.io docker-compose-plugin curl jq
+apt-get install -y docker.io curl jq
 
 systemctl enable docker
 systemctl start docker
+
+# ─── Get public IP ───────────────────────────────────────────────
+PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+echo "Public IP: $PUBLIC_IP"
 
 # ─── Install Coder ───────────────────────────────────────────────
 curl -fsSL https://coder.com/install.sh | sh
@@ -59,8 +66,8 @@ curl -fsSL https://coder.com/install.sh | sh
 # ─── Configure Coder ─────────────────────────────────────────────
 mkdir -p /etc/coder.d
 
-cat > /etc/coder.d/coder.env <<'CODERENV'
-CODER_ACCESS_URL=https://$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+cat > /etc/coder.d/coder.env <<CODERENV
+CODER_ACCESS_URL=http://$PUBLIC_IP
 CODER_WILDCARD_ACCESS_URL=
 CODER_HTTP_ADDRESS=0.0.0.0:80
 CODER_TLS_ENABLE=false
@@ -81,7 +88,9 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# ─── Login and push template ─────────────────────────────────────
+echo "Coder is ready"
+
+# ─── Login and create first user ─────────────────────────────────
 export CODER_URL="http://localhost"
 
 coder login --first-user-email admin@egregore.xyz \
@@ -90,12 +99,9 @@ coder login --first-user-email admin@egregore.xyz \
   --first-user-trial=false \
   "$CODER_URL" || true
 
-# Pull the Egregore workspace image
-docker pull ghcr.io/curve-labs/egregore-workspace:latest
-
 # Store org config for template variables
 mkdir -p /opt/egregore
-cat > /opt/egregore/org-config.json <<'ORGCFG'
+cat > /opt/egregore/org-config.json <<ORGCFG
 {{
   "org_slug": "{org_slug}",
   "org_name": "{org_name}",
@@ -109,7 +115,7 @@ cat > /opt/egregore/org-config.json <<'ORGCFG'
 }}
 ORGCFG
 
-echo "Egregore hosting ready for {org_slug}"
+echo "=== Egregore cloud-init completed at $(date) ==="
 """
 
 
