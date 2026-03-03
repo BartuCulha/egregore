@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 HETZNER_API_URL = "https://api.hetzner.cloud/v1"
 HETZNER_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 
-# Default VPS tier for small teams (2 vCPU, 4GB RAM, ~€4.35/mo)
-DEFAULT_SERVER_TYPE = "cpx11"
-DEFAULT_LOCATION = "fsn1"  # Falkenstein, Germany
+# Default VPS tier for small teams (2 ARM vCPU, 4GB RAM, 40GB disk, ~€3.85/mo)
+DEFAULT_SERVER_TYPE = "cax11"
+DEFAULT_LOCATION = "nbg1"  # Nuremberg, Germany
 DEFAULT_IMAGE = "ubuntu-24.04"
 
 
