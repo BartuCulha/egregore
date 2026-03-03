@@ -30,6 +30,7 @@ from .models import (
     OrgSetup, OrgJoin, OrgTelegram, GitHubCallback, SetupOrgsResponse,
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
+    HostingProvision, HostingUser, UserKeysUpdate,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -54,7 +55,7 @@ _cors_origins = os.environ.get(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -677,13 +678,62 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
 
     logger.info(f"Org setup complete: {slug} by {user['login']}")
 
-    return {
+    result = {
         "setup_token": setup_token,
         "fork_url": fork_url,
         "memory_url": memory_url,
         "org_slug": slug,
         "telegram_invite_link": telegram_invite,
     }
+
+    # 10. Provision hosted VPS if requested
+    if body.hosting:
+        try:
+            from .services.hosting import provision_vps
+
+            managed_repos = ",".join(body.repos) if body.repos else ""
+            vps_result = await provision_vps(
+                org_slug=slug,
+                org_name=body.org_name,
+                github_org=owner,
+                repo_name=repo_name,
+                fork_url=fork_url,
+                memory_url=memory_url,
+                api_url=api_url,
+                egregore_api_key=api_key,
+                managed_repos=managed_repos,
+                server_type=body.server_type,
+            )
+
+            if vps_result.get("error"):
+                logger.warning(f"VPS provisioning failed for {slug}: {vps_result['error']}")
+                result["hosting_status"] = "failed"
+                result["hosting_error"] = vps_result["error"]
+            else:
+                result["hosting_status"] = "provisioning"
+                result["hosting_ip"] = vps_result.get("ip", "")
+                result["hosting_coder_url"] = vps_result.get("coder_url", "")
+
+                # Store VPS info in Supabase
+                if USE_SUPABASE:
+                    try:
+                        from .services import supabase as sb
+                        sb.get_client().table("orgs").update({
+                            "hosting_ip": vps_result["ip"],
+                            "hosting_server_id": str(vps_result.get("server_id", "")),
+                            "hosting_coder_url": vps_result.get("coder_url", ""),
+                            "hosting_enabled": True,
+                        }).eq("slug", slug).execute()
+                    except Exception as e:
+                        logger.warning(f"Failed to store hosting info: {e}")
+
+                logger.info(f"VPS provisioning started for {slug}")
+        except Exception as e:
+            logger.error(f"VPS provisioning error for {slug}: {e}")
+            result["hosting_status"] = "failed"
+            result["hosting_error"] = str(e)
+
+    return result
 
 
 @app.post("/api/org/join")
@@ -3531,6 +3581,256 @@ async def admin_delete_org(slug: str, admin_user: str = Depends(validate_admin_g
     logger.info(f"Admin {admin_user} deleted org: {slug}")
 
     return {"status": "ok", "slug": slug, "steps": steps}
+
+
+# =============================================================================
+# HOSTING (Coder VPS provisioning)
+# =============================================================================
+
+
+@app.post("/api/hosting/provision")
+async def hosting_provision(body: HostingProvision, admin_user: str = Depends(validate_admin_github_token)):
+    """Provision a Hetzner VPS with Coder for an org. Admin only."""
+    from .services.hosting import provision_vps
+
+    # Get org's API key for the workspace
+    org_config = ORG_CONFIGS.get(body.org_slug)
+    egregore_api_key = ""
+    if org_config:
+        egregore_api_key = await _get_org_api_key(org_config, body.org_slug)
+
+    api_url = ""
+    if org_config:
+        api_url = org_config.get("api_url", os.environ.get("EGREGORE_API_URL", ""))
+    if not api_url:
+        api_url = os.environ.get("EGREGORE_API_URL", "https://egregore-production-55f2.up.railway.app")
+
+    result = await provision_vps(
+        org_slug=body.org_slug,
+        org_name=body.org_name,
+        github_org=body.github_org,
+        repo_name=body.repo_name,
+        fork_url=body.fork_url or f"https://github.com/{body.github_org}/{body.repo_name}.git",
+        memory_url=body.memory_url or f"https://github.com/{body.github_org}/{body.github_org}-memory.git",
+        api_url=api_url,
+        egregore_api_key=egregore_api_key,
+        managed_repos=body.managed_repos,
+        server_type=body.server_type,
+    )
+
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Store VPS info in Supabase for the org
+    if USE_SUPABASE and result.get("ip"):
+        try:
+            from .services import supabase as sb
+            sb.get_client().table("orgs").update({
+                "hosting_ip": result["ip"],
+                "hosting_server_id": str(result.get("server_id", "")),
+                "hosting_coder_url": result.get("coder_url", ""),
+                "hosting_enabled": True,
+            }).eq("slug", body.org_slug).execute()
+        except Exception as e:
+            logger.warning(f"Failed to store hosting info in Supabase: {e}")
+
+    logger.info(f"Admin {admin_user} provisioned VPS for {body.org_slug}")
+    return result
+
+
+@app.get("/api/hosting/status/{slug}")
+async def hosting_status(slug: str, authorization: str = Header(...)):
+    """Check VPS health + Coder readiness for an org. Any authenticated GitHub user."""
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        await gh.get_user(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    from .services.hosting import get_vps_status
+    result = await get_vps_status(slug)
+    return result
+
+
+@app.delete("/api/hosting/deprovision/{slug}")
+async def hosting_deprovision(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Tear down the VPS for an org. Admin only."""
+    from .services.hosting import deprovision_vps
+    result = await deprovision_vps(slug)
+
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Clear hosting info from Supabase
+    if USE_SUPABASE:
+        try:
+            from .services import supabase as sb
+            sb.get_client().table("orgs").update({
+                "hosting_ip": None,
+                "hosting_server_id": None,
+                "hosting_coder_url": None,
+                "hosting_enabled": False,
+            }).eq("slug", slug).execute()
+        except Exception as e:
+            logger.warning(f"Failed to clear hosting info in Supabase: {e}")
+
+    logger.info(f"Admin {admin_user} deprovisioned VPS for {slug}")
+    return result
+
+
+@app.post("/api/hosting/user/{slug}")
+async def hosting_create_user(slug: str, body: HostingUser, org: dict = Depends(validate_api_key)):
+    """Create a Coder user on an org's VPS. Callable with org API key (used by /invite flow)."""
+    from .services.coder import CoderClient
+
+    # Look up the org's Coder URL and admin token
+    coder_url = ""
+    coder_token = ""
+
+    if USE_SUPABASE:
+        try:
+            from .services import supabase as sb
+            rows = sb.get_client().table("orgs").select("hosting_coder_url, hosting_coder_token").eq("slug", slug).execute()
+            if rows.data:
+                coder_url = rows.data[0].get("hosting_coder_url", "")
+                coder_token = rows.data[0].get("hosting_coder_token", "")
+        except Exception as e:
+            logger.warning(f"Failed to look up Coder info: {e}")
+
+    if not coder_url or not coder_token:
+        raise HTTPException(status_code=404, detail=f"No hosted Coder instance found for {slug}")
+
+    client = CoderClient(coder_url, coder_token)
+    result = await client.create_user(
+        username=body.username,
+        email=body.email or f"{body.username}@users.noreply.github.com",
+        name=body.name or body.username,
+    )
+
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("detail", "Unknown error"))
+
+    return result
+
+
+@app.get("/api/hosting/info/{slug}")
+async def hosting_info(slug: str, authorization: str = Header(...)):
+    """Get hosting info for an org. Any authenticated user can check if hosting is available.
+
+    Returns coder_url if hosting is enabled, so the website can redirect.
+    """
+    # Validate the caller has a valid GitHub token
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        await gh.get_user(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    result = {"hosting_enabled": False, "coder_url": None}
+
+    if USE_SUPABASE:
+        try:
+            from .services import supabase as sb
+            rows = sb.get_client().table("orgs").select(
+                "hosting_enabled, hosting_coder_url"
+            ).eq("slug", slug).execute()
+            if rows.data and rows.data[0].get("hosting_enabled"):
+                result["hosting_enabled"] = True
+                result["coder_url"] = rows.data[0].get("hosting_coder_url", "")
+        except Exception as e:
+            logger.warning(f"Failed to check hosting info: {e}")
+
+    return result
+
+
+# =============================================================================
+# USER API KEYS
+# =============================================================================
+
+
+@app.get("/api/user/keys")
+async def user_keys_status(authorization: str = Header(...)):
+    """Check which API keys a user has set (without decrypting).
+
+    Requires GitHub token. Returns key status for the authenticated user.
+    """
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        user = await gh.get_user(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    from .services.keys import get_user_key_status
+    return get_user_key_status(user["login"])
+
+
+@app.put("/api/user/keys")
+async def user_keys_update(body: UserKeysUpdate, authorization: str = Header(...)):
+    """Store or update a user's API key. Encrypted at rest.
+
+    Requires GitHub token. Only the authenticated user can set their own keys.
+    """
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        user = await gh.get_user(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    from .services.keys import store_user_key
+
+    results = {}
+    if body.anthropic_api_key is not None:
+        ok = store_user_key(user["login"], "anthropic_api_key", body.anthropic_api_key)
+        results["anthropic_api_key"] = "stored" if ok else "failed"
+
+    if not results:
+        raise HTTPException(status_code=400, detail="No keys provided")
+
+    return {"status": "ok", **results}
+
+
+@app.delete("/api/user/keys/{key_name}")
+async def user_keys_delete(key_name: str, authorization: str = Header(...)):
+    """Delete a stored API key.
+
+    Requires GitHub token. Only the authenticated user can delete their own keys.
+    """
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        user = await gh.get_user(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub token")
+
+    allowed_keys = {"anthropic_api_key"}
+    if key_name not in allowed_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {key_name}")
+
+    from .services.keys import delete_user_key
+    delete_user_key(user["login"], key_name)
+    return {"status": "ok", "deleted": key_name}
+
+
+@app.get("/api/user/keys/fetch")
+async def user_keys_fetch(
+    key_name: str = Query(...),
+    github_username: str = Query(...),
+    org: dict = Depends(validate_api_key),
+):
+    """Fetch a decrypted user key. For workspace init only — requires org API key + github_username.
+
+    Used by workspace-init.sh to inject the user's Anthropic key into the workspace
+    without them re-entering it.
+    """
+
+    allowed_keys = {"anthropic_api_key"}
+    if key_name not in allowed_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {key_name}")
+
+    from .services.keys import get_user_key
+    value = get_user_key(github_username, key_name)
+    if not value:
+        return {"status": "not_set", "value": None}
+    return {"status": "ok", "value": value}
 
 
 # =============================================================================
