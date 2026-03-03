@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 HETZNER_API_URL = "https://api.hetzner.cloud/v1"
 HETZNER_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 
-# Default VPS tier for small teams (2 vCPU, 4GB RAM, ~$5/mo)
-DEFAULT_SERVER_TYPE = "cx22"
-DEFAULT_LOCATION = "fsn1"  # Falkenstein, Germany
-DEFAULT_IMAGE = "ubuntu-22.04"
+# Default VPS tier for small teams (2 ARM vCPU, 4GB RAM, 40GB disk, ~€3.85/mo)
+DEFAULT_SERVER_TYPE = "cax11"
+DEFAULT_LOCATION = "nbg1"  # Nuremberg, Germany
+DEFAULT_IMAGE = "ubuntu-24.04"
 
 
 def _headers() -> dict:
@@ -184,8 +184,9 @@ async def provision_vps(
         )
 
         if resp.status_code not in (200, 201):
-            logger.error(f"Hetzner create failed: {resp.status_code} {resp.text}")
-            return {"error": f"Hetzner API error: {resp.status_code}"}
+            error_detail = resp.text[:500]
+            logger.error(f"Hetzner create failed: {resp.status_code} {error_detail}")
+            return {"error": f"Hetzner API error: {resp.status_code}", "detail": error_detail}
 
         data = resp.json()
         server = data.get("server", {})

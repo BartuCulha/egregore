@@ -39,7 +39,7 @@ class OrgSetup(BaseModel):
     instance_name: Optional[str] = None
     transcript_sharing: bool = False
     hosting: bool = False
-    server_type: str = "cx22"
+    server_type: str = "cax11"
 
 
 class OrgJoin(BaseModel):
@@ -176,7 +176,7 @@ class HostingProvision(BaseModel):
     fork_url: Optional[str] = None
     memory_url: Optional[str] = None
     managed_repos: str = ""
-    server_type: str = "cx22"
+    server_type: str = "cax11"
 
 
 class HostingUser(BaseModel):
