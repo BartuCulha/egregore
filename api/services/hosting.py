@@ -49,6 +49,9 @@ set -eo pipefail
 exec > /var/log/egregore-init.log 2>&1
 echo "=== Egregore cloud-init started at $(date) ==="
 
+# ─── Root access for debugging ───────────────────────────────────
+echo "root:{coder_password}" | chpasswd
+
 # ─── System setup ────────────────────────────────────────────────
 apt-get update
 apt-get install -y docker.io curl jq
