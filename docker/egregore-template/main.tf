@@ -1,0 +1,172 @@
+terraform {
+  required_providers {
+    coder = {
+      source = "coder/coder"
+    }
+    docker = {
+      source = "kreuzwerker/docker"
+    }
+  }
+}
+
+provider "coder" {}
+provider "docker" {}
+
+# ─── Template parameters (set per org by admin) ──────────────────
+
+data "coder_parameter" "org_slug" {
+  name         = "org_slug"
+  display_name = "Org Slug"
+  description  = "The Egregore org identifier"
+  type         = "string"
+  mutable      = false
+}
+
+data "coder_parameter" "org_name" {
+  name         = "org_name"
+  display_name = "Org Name"
+  description  = "Display name for the org"
+  type         = "string"
+  mutable      = false
+}
+
+data "coder_parameter" "github_org" {
+  name         = "github_org"
+  display_name = "GitHub Org"
+  description  = "GitHub org or user that owns the repos"
+  type         = "string"
+  mutable      = false
+}
+
+data "coder_parameter" "repo_name" {
+  name         = "repo_name"
+  display_name = "Repo Name"
+  description  = "Name of the Egregore repo (fork)"
+  type         = "string"
+  default      = "egregore-core"
+  mutable      = false
+}
+
+data "coder_parameter" "managed_repos" {
+  name         = "managed_repos"
+  display_name = "Managed Repos"
+  description  = "Comma-separated list of managed repos"
+  type         = "string"
+  default      = ""
+  mutable      = false
+}
+
+# ─── Workspace metadata ──────────────────────────────────────────
+# Note: Anthropic API key is NOT a Coder parameter. Users set their key
+# via egregore.xyz/settings, and workspace-init.sh fetches it from the API.
+
+data "coder_workspace" "me" {}
+data "coder_workspace_owner" "me" {}
+
+# ─── Org-level secrets (set by admin in Coder template variables) ─
+
+variable "egregore_api_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "api_url" {
+  type    = string
+  default = "https://egregore-production-55f2.up.railway.app"
+}
+
+variable "memory_url" {
+  type = string
+}
+
+variable "fork_url" {
+  type = string
+}
+
+# ─── Docker image ────────────────────────────────────────────────
+
+resource "docker_image" "egregore" {
+  name = "ghcr.io/curve-labs/egregore-workspace:latest"
+}
+
+# ─── Container ───────────────────────────────────────────────────
+
+resource "docker_container" "workspace" {
+  count = data.coder_workspace.me.start_count
+  name  = "coder-${data.coder_workspace_owner.me.name}-${lower(data.coder_workspace.me.name)}"
+  image = docker_image.egregore.image_id
+
+  env = [
+    "CODER_AGENT_TOKEN=${coder_agent.main.token}",
+    # Anthropic key fetched at startup from egregore.xyz/settings via API
+    # Org-level: shared across all workspaces
+    "EGREGORE_API_KEY=${var.egregore_api_key}",
+    "GITHUB_TOKEN=${data.coder_workspace_owner.me.oidc_access_token}",
+    "ORG_SLUG=${data.coder_parameter.org_slug.value}",
+    "ORG_NAME=${data.coder_parameter.org_name.value}",
+    "GITHUB_ORG=${data.coder_parameter.github_org.value}",
+    "REPO_NAME=${data.coder_parameter.repo_name.value}",
+    "MANAGED_REPOS=${data.coder_parameter.managed_repos.value}",
+    "API_URL=${var.api_url}",
+    "MEMORY_URL=${var.memory_url}",
+    "FORK_URL=${var.fork_url}",
+  ]
+
+  host {
+    host = "host.docker.internal"
+    ip   = "host-gateway"
+  }
+
+  # Persistent home directory across workspace restarts
+  volumes {
+    volume_name    = "coder-${data.coder_workspace_owner.me.name}-${lower(data.coder_workspace.me.name)}-home"
+    container_path = "/home/egregore"
+    read_only      = false
+  }
+
+  user = "egregore"
+
+  # Keep container alive — Coder agent handles startup
+  command = ["sh", "-c", "exec sleep infinity"]
+}
+
+# ─── Coder agent ─────────────────────────────────────────────────
+
+resource "coder_agent" "main" {
+  os   = "linux"
+  arch = "amd64"
+  dir  = "/home/egregore/egregore"
+
+  display_apps {
+    vscode       = false
+    web_terminal = true
+    ssh_helper   = true
+  }
+
+  startup_script          = "/opt/egregore/bin/workspace-init.sh"
+  startup_script_behavior = "blocking"
+
+  metadata {
+    key          = "org"
+    display_name = "Egregore"
+    script       = "jq -r '.org_name' ~/egregore/egregore.json 2>/dev/null || echo 'initializing...'"
+    interval     = 30
+  }
+
+  metadata {
+    key          = "branch"
+    display_name = "Branch"
+    script       = "cd ~/egregore && git branch --show-current 2>/dev/null || echo '-'"
+    interval     = 10
+  }
+}
+
+# ─── Web terminal app ────────────────────────────────────────────
+
+resource "coder_app" "terminal" {
+  agent_id     = coder_agent.main.id
+  slug         = "terminal"
+  display_name = "Terminal"
+  command      = "zsh"
+  icon         = "/icon/terminal.svg"
+}

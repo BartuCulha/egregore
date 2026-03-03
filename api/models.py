@@ -38,6 +38,8 @@ class OrgSetup(BaseModel):
     repos: list[str] = []
     instance_name: Optional[str] = None
     transcript_sharing: bool = False
+    hosting: bool = False
+    server_type: str = "cx22"
 
 
 class OrgJoin(BaseModel):
@@ -160,3 +162,30 @@ class HealthCheckin(BaseModel):
     errors: list[str] = []
     platform: Optional[str] = None
     shell: Optional[str] = None
+
+
+# --- Hosting models ---
+
+
+class HostingProvision(BaseModel):
+    """Provision a Coder VPS for an org."""
+    org_slug: str
+    org_name: str
+    github_org: str
+    repo_name: str = "egregore-core"
+    fork_url: Optional[str] = None
+    memory_url: Optional[str] = None
+    managed_repos: str = ""
+    server_type: str = "cx22"
+
+
+class HostingUser(BaseModel):
+    """Create a Coder user on an org's VPS."""
+    username: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+
+
+class UserKeysUpdate(BaseModel):
+    """Update user API keys."""
+    anthropic_api_key: Optional[str] = None
