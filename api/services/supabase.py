@@ -337,7 +337,7 @@ def get_user_orgs(github_username: str) -> list[dict]:
     result = (
         get_client()
         .table("memberships")
-        .select("*, orgs(slug, name, github_org, telegram_chat_id)")
+        .select("*, orgs(slug, name, github_org, telegram_chat_id, hosting_enabled, hosting_coder_url)")
         .eq("user_id", user["id"])
         .eq("status", "active")
         .execute()
