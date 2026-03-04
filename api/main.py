@@ -1801,6 +1801,34 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     if org_config:
         telegram_group_link = await create_group_invite_link(org_config)
 
+    # If org has hosted Coder, pre-create user + workspace (fire-and-forget — don't block invite accept)
+    coder_url = None
+    if USE_SUPABASE:
+        try:
+            from .services import supabase as sb
+            rows = sb.get_client().table("orgs").select(
+                "hosting_enabled, hosting_coder_url, hosting_coder_token"
+            ).eq("slug", slug).execute()
+            if rows.data and rows.data[0].get("hosting_enabled"):
+                coder_url = rows.data[0].get("hosting_coder_url", "")
+                coder_token = rows.data[0].get("hosting_coder_token", "")
+                if coder_url and coder_token:
+                    from .services.coder import CoderClient
+                    coder_client = CoderClient(coder_url, coder_token)
+                    github_username = user["login"]
+                    # Create Coder user
+                    coder_result = await coder_client.create_user(
+                        username=github_username,
+                        email=f"{github_username}@users.noreply.github.com",
+                        name=user.get("name", github_username),
+                    )
+                    logger.info(f"Coder user for invite: {github_username} → {coder_result.get('status')}")
+                    # Create workspace (so it's ready when they click "Open in browser")
+                    ws_result = await coder_client.create_workspace(owner=github_username)
+                    logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
+        except Exception as e:
+            logger.warning(f"Failed to create Coder user/workspace for {user['login']}: {e}")
+
     return {
         "status": "accepted",
         "setup_token": setup_token,
@@ -1809,6 +1837,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         "org_slug": slug,
         "org_name": org_name,
         "telegram_group_link": telegram_group_link,
+        "hosting_coder_url": coder_url,
     }
 
 
@@ -3201,6 +3230,17 @@ async def admin_telemetry(
 # =============================================================================
 
 
+def _build_workspace_url(org_data: dict, membership: dict) -> str:
+    """Build direct workspace terminal URL for this user on the hosted Coder."""
+    coder_url = (org_data.get("hosting_coder_url") or "").rstrip("/")
+    if not org_data.get("hosting_enabled") or not coder_url:
+        return ""
+    display_name = membership.get("display_name", "")
+    if not display_name:
+        return coder_url
+    return f"{coder_url}/@{display_name}/egregore/terminal"
+
+
 @app.get("/api/me/egregores")
 async def me_egregores(github_username: str = Depends(validate_github_token)):
     """User dashboard: return ONLY the authenticated user's orgs with full detail.
@@ -3319,6 +3359,9 @@ async def me_egregores(github_username: str = Depends(validate_github_token)):
             "api_key": api_key,
             "api_key_masked": masked_key,
             "has_telegram": bool(org_data.get("telegram_chat_id")),
+            "hosting_enabled": bool(org_data.get("hosting_enabled")),
+            "hosting_coder_url": org_data.get("hosting_coder_url", ""),
+            "hosting_workspace_url": _build_workspace_url(org_data, m),
             "members": members_list,
             "latest_checkin": checkin,
             "diagnostics": diagnostics,
@@ -3616,21 +3659,27 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
         egregore_api_key=egregore_api_key,
         managed_repos=body.managed_repos,
         server_type=body.server_type,
+        github_oauth_client_id=body.github_oauth_client_id,
+        github_oauth_client_secret=body.github_oauth_client_secret,
     )
 
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
 
-    # Store VPS info in Supabase for the org
+    # Store VPS info in Supabase for the org (including coder_password for later token retrieval)
     if USE_SUPABASE and result.get("ip"):
         try:
             from .services import supabase as sb
-            sb.get_client().table("orgs").update({
+            update_data = {
                 "hosting_ip": result["ip"],
                 "hosting_server_id": str(result.get("server_id", "")),
                 "hosting_coder_url": result.get("coder_url", ""),
                 "hosting_enabled": True,
-            }).eq("slug", body.org_slug).execute()
+            }
+            # Store coder password so we can obtain a session token later
+            if result.get("coder_password"):
+                update_data["hosting_coder_password"] = result["coder_password"]
+            sb.get_client().table("orgs").update(update_data).eq("slug", body.org_slug).execute()
         except Exception as e:
             logger.warning(f"Failed to store hosting info in Supabase: {e}")
 
@@ -3640,7 +3689,12 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
 
 @app.get("/api/hosting/status/{slug}")
 async def hosting_status(slug: str, authorization: str = Header(...)):
-    """Check VPS health + Coder readiness for an org. Any authenticated GitHub user."""
+    """Check VPS health + Coder readiness for an org. Any authenticated GitHub user.
+
+    Side effect: when Coder is ready but no session token is stored yet,
+    auto-obtains one using the stored coder_password and saves it to Supabase.
+    This is how the API gets the admin token after VPS provisioning.
+    """
     token = authorization.replace("Bearer ", "").strip()
     try:
         await gh.get_user(token)
@@ -3649,6 +3703,28 @@ async def hosting_status(slug: str, authorization: str = Header(...)):
 
     from .services.hosting import get_vps_status
     result = await get_vps_status(slug)
+
+    # Auto-store Coder session token when Coder is ready but token is missing
+    if USE_SUPABASE and result.get("coder_ready") and result.get("ip"):
+        try:
+            from .services import supabase as sb
+            rows = sb.get_client().table("orgs").select(
+                "hosting_coder_token, hosting_coder_password"
+            ).eq("slug", slug).execute()
+            if rows.data and not rows.data[0].get("hosting_coder_token"):
+                coder_password = rows.data[0].get("hosting_coder_password", "")
+                if coder_password:
+                    from .services.hosting import get_coder_session_token
+                    session_token = await get_coder_session_token(result["ip"], coder_password)
+                    if session_token:
+                        sb.get_client().table("orgs").update({
+                            "hosting_coder_token": session_token,
+                        }).eq("slug", slug).execute()
+                        result["token_stored"] = True
+                        logger.info(f"Auto-stored Coder session token for {slug}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-store Coder token for {slug}: {e}")
+
     return result
 
 
