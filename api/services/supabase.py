@@ -351,6 +351,7 @@ def add_membership(
     role: str = "member",
     invited_by_username: Optional[str] = None,
     display_name: Optional[str] = None,
+    coder_username: Optional[str] = None,
     member_role: Optional[str] = None,
     focus: Optional[str] = None,
     work_style: Optional[str] = None,
@@ -384,6 +385,8 @@ def add_membership(
         data["invited_by"] = invited_by_id
     if display_name is not None:
         data["display_name"] = display_name
+    if coder_username is not None:
+        data["coder_username"] = coder_username
     if member_role is not None:
         data["member_role"] = member_role
     if focus is not None:
