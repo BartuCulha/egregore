@@ -14,6 +14,27 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+async def get_coder_session_token(ip: str, password: str) -> str:
+    """Login to Coder and return a session token for API access.
+
+    Used to obtain the admin token after VPS provisioning, so the API
+    can create users and workspaces programmatically.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                f"http://{ip}/api/v2/users/login",
+                json={"email": "admin@egregore.xyz", "password": password},
+            )
+            if resp.status_code == 201:
+                return resp.json().get("session_token", "")
+            logger.warning(f"Coder login failed: {resp.status_code} {resp.text[:200]}")
+            return ""
+        except Exception as e:
+            logger.warning(f"Coder login error: {e}")
+            return ""
+
 HETZNER_API_URL = "https://api.hetzner.cloud/v1"
 HETZNER_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
 
@@ -41,6 +62,8 @@ def _cloud_init_script(
     github_org: str,
     repo_name: str,
     managed_repos: str = "",
+    github_oauth_client_id: str = "",
+    github_oauth_client_secret: str = "",
 ) -> str:
     """Generate cloud-init script that installs Coder + Egregore template on a fresh VPS."""
     return f"""#!/bin/bash
@@ -83,6 +106,16 @@ CODER_FIRST_USER_PASSWORD={coder_password}
 CODER_FIRST_USER_TRIAL=false
 CODER_TELEMETRY_ENABLE=false
 CODERENV
+
+# GitHub OAuth (if configured — enables "Login with GitHub" on Coder)
+if [ -n "{github_oauth_client_id}" ] && [ "{github_oauth_client_id}" != "" ]; then
+  cat >> /etc/coder.d/coder.env <<OAUTHENV
+CODER_OAUTH2_GITHUB_CLIENT_ID={github_oauth_client_id}
+CODER_OAUTH2_GITHUB_CLIENT_SECRET={github_oauth_client_secret}
+CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS=true
+CODER_OAUTH2_GITHUB_ALLOWED_ORGS={github_org}
+OAUTHENV
+fi
 
 # ─── Start Coder ─────────────────────────────────────────────────
 systemctl enable coder
@@ -136,6 +169,8 @@ async def provision_vps(
     egregore_api_key: str = "",
     managed_repos: str = "",
     server_type: str = DEFAULT_SERVER_TYPE,
+    github_oauth_client_id: str = "",
+    github_oauth_client_secret: str = "",
 ) -> dict:
     """Provision a Hetzner VPS with Coder installed for an org."""
     if not HETZNER_TOKEN:
@@ -154,6 +189,8 @@ async def provision_vps(
         github_org=github_org,
         repo_name=repo_name,
         managed_repos=managed_repos,
+        github_oauth_client_id=github_oauth_client_id,
+        github_oauth_client_secret=github_oauth_client_secret,
     )
 
     server_name = f"egregore-{org_slug}"

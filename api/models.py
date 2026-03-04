@@ -177,6 +177,8 @@ class HostingProvision(BaseModel):
     memory_url: Optional[str] = None
     managed_repos: str = ""
     server_type: str = "cax11"
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
 
 
 class HostingUser(BaseModel):
