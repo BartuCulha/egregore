@@ -3230,6 +3230,17 @@ async def admin_telemetry(
 # =============================================================================
 
 
+def _build_workspace_url(org_data: dict, membership: dict) -> str:
+    """Build direct workspace terminal URL for this user on the hosted Coder."""
+    coder_url = (org_data.get("hosting_coder_url") or "").rstrip("/")
+    if not org_data.get("hosting_enabled") or not coder_url:
+        return ""
+    display_name = membership.get("display_name", "")
+    if not display_name:
+        return coder_url
+    return f"{coder_url}/@{display_name}/egregore/terminal"
+
+
 @app.get("/api/me/egregores")
 async def me_egregores(github_username: str = Depends(validate_github_token)):
     """User dashboard: return ONLY the authenticated user's orgs with full detail.
@@ -3350,6 +3361,7 @@ async def me_egregores(github_username: str = Depends(validate_github_token)):
             "has_telegram": bool(org_data.get("telegram_chat_id")),
             "hosting_enabled": bool(org_data.get("hosting_enabled")),
             "hosting_coder_url": org_data.get("hosting_coder_url", ""),
+            "hosting_workspace_url": _build_workspace_url(org_data, m),
             "members": members_list,
             "latest_checkin": checkin,
             "diagnostics": diagnostics,
