@@ -3235,10 +3235,10 @@ def _build_workspace_url(org_data: dict, membership: dict) -> str:
     coder_url = (org_data.get("hosting_coder_url") or "").rstrip("/")
     if not org_data.get("hosting_enabled") or not coder_url:
         return ""
-    display_name = membership.get("display_name", "")
-    if not display_name:
+    coder_user = membership.get("coder_username") or ""
+    if not coder_user:
         return coder_url
-    return f"{coder_url}/@{display_name}/egregore/terminal"
+    return f"{coder_url}/@{coder_user}/egregore/terminal"
 
 
 @app.get("/api/me/egregores")
