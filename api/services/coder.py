@@ -119,6 +119,65 @@ class CoderClient:
                 return resp.json().get("workspaces", [])
             return []
 
+    async def create_workspace(
+        self,
+        owner: str,
+        template_name: str = "Egregore",
+        workspace_name: str = "egregore",
+    ) -> dict:
+        """Create a workspace for a user and start it.
+
+        The workspace is pre-created so when the user clicks "Open in browser",
+        it's already running — no "Create Workspace" button needed.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Check if workspace already exists for this user
+            existing = await self.list_workspaces(owner=owner)
+            if existing:
+                return {"status": "exists", "workspace": existing[0]}
+
+            # Find the template ID by name
+            templates = await self.get_templates()
+            template_id = None
+            for t in templates:
+                if t.get("name", "").lower() == template_name.lower():
+                    template_id = t["id"]
+                    break
+
+            if not template_id:
+                logger.warning(f"Template '{template_name}' not found on Coder instance")
+                return {"status": "error", "detail": f"Template '{template_name}' not found"}
+
+            # Get the latest template version
+            ver_resp = await client.get(
+                f"{self.base_url}/api/v2/templates/{template_id}/versions",
+                headers=self._headers(),
+            )
+            if ver_resp.status_code != 200:
+                return {"status": "error", "detail": f"Failed to get template versions: {ver_resp.status_code}"}
+
+            versions = ver_resp.json()
+            if not versions:
+                return {"status": "error", "detail": "No template versions found"}
+            latest_version_id = versions[0]["id"]
+
+            # Create workspace
+            resp = await client.post(
+                f"{self.base_url}/api/v2/organizations/default/members/{owner}/workspaces",
+                headers=self._headers(),
+                json={
+                    "name": workspace_name,
+                    "template_version_id": latest_version_id,
+                },
+            )
+
+            if resp.status_code in (200, 201):
+                logger.info(f"Coder workspace created: {owner}/{workspace_name}")
+                return {"status": "created", "workspace": resp.json()}
+            else:
+                logger.warning(f"Workspace creation failed: {resp.status_code} {resp.text[:200]}")
+                return {"status": "error", "detail": resp.text[:200]}
+
 
 async def get_coder_client(coder_url: str, session_token: str) -> CoderClient:
     """Create a CoderClient for an org's Coder instance.
