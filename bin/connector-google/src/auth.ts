@@ -11,12 +11,6 @@ import { writeState, readState, isHosted, getApiUrl, getApiKey } from "./config.
 const TOKEN_DIR = join(homedir(), ".egregore", "context", "google");
 const TOKEN_PATH = join(TOKEN_DIR, ".tokens.json");
 
-// Google OAuth client IDs for installed (desktop) applications.
-// These are not secrets — they're embedded in any desktop OAuth app.
-// Users can override via GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET env vars.
-const DEFAULT_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
-const DEFAULT_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
-
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -28,23 +22,62 @@ const SCOPES = [
 const REDIRECT_PORT = 8095;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
 
-function createOAuth2Client() {
-  if (!DEFAULT_CLIENT_ID || !DEFAULT_CLIENT_SECRET) {
-    throw new Error(
-      "Google OAuth credentials not configured.\n" +
-        "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.\n" +
-        "Create them at https://console.cloud.google.com/apis/credentials"
-    );
+/** Cached credentials so we only fetch from API once per process. */
+let _cachedCredentials: { clientId: string; clientSecret: string } | null = null;
+
+/**
+ * Get Google OAuth credentials.
+ * Priority: env vars > API server > error.
+ */
+async function getCredentials(): Promise<{ clientId: string; clientSecret: string }> {
+  if (_cachedCredentials) return _cachedCredentials;
+
+  // 1. Check local env vars (self-hosted orgs can override)
+  const envId = process.env.GOOGLE_CLIENT_ID ?? "";
+  const envSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+  if (envId && envSecret) {
+    _cachedCredentials = { clientId: envId, clientSecret: envSecret };
+    return _cachedCredentials;
   }
-  return new google.auth.OAuth2(DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, REDIRECT_URI);
+
+  // 2. Fetch from API server (shared Egregore credentials)
+  const apiUrl = getApiUrl();
+  const apiKey = getApiKey();
+  if (apiUrl && apiKey) {
+    try {
+      const resp = await fetch(`${apiUrl}/api/connectors/google/credentials`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { client_id: string; client_secret: string };
+        if (data.client_id && data.client_secret) {
+          _cachedCredentials = { clientId: data.client_id, clientSecret: data.client_secret };
+          return _cachedCredentials;
+        }
+      }
+    } catch {
+      // Fall through to error
+    }
+  }
+
+  throw new Error(
+    "Google OAuth credentials not available.\n" +
+      "They should be served by the Egregore API. If you're self-hosting,\n" +
+      "set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file."
+  );
+}
+
+async function createOAuth2Client() {
+  const creds = await getCredentials();
+  return new google.auth.OAuth2(creds.clientId, creds.clientSecret, REDIRECT_URI);
 }
 
 /**
  * Get an authenticated OAuth2 client. Loads saved tokens.
  * Throws if not authenticated.
  */
-export function getAuthClient(): InstanceType<typeof google.auth.OAuth2> {
-  const client = createOAuth2Client();
+export async function getAuthClient(): Promise<InstanceType<typeof google.auth.OAuth2>> {
+  const client = await createOAuth2Client();
   const tokens = loadTokens();
   if (!tokens) {
     throw new Error("Not authenticated. Run 'auth' first.");
@@ -90,7 +123,7 @@ export async function authSetup(): Promise<void> {
     return authHosted();
   }
 
-  const client = createOAuth2Client();
+  const client = await createOAuth2Client();
   const authUrl = client.generateAuthUrl({
     access_type: "offline",
     scope: SCOPES,
@@ -168,7 +201,7 @@ export async function authStatus(): Promise<AuthStatus> {
   }
 
   try {
-    const client = getAuthClient();
+    const client = await getAuthClient();
     const oauth2 = google.oauth2({ version: "v2", auth: client });
     const userInfo = await oauth2.userinfo.get();
     return { connected: true, account: userInfo.data.email ?? undefined };
@@ -189,7 +222,7 @@ export async function authRevoke(): Promise<void> {
   const tokens = loadTokens();
   if (tokens?.access_token) {
     try {
-      const client = createOAuth2Client();
+      const client = await createOAuth2Client();
       client.setCredentials(tokens);
       await client.revokeCredentials();
     } catch {

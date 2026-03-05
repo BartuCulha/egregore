@@ -7,7 +7,7 @@ import { cacheItem } from "./context.js";
 
 export async function getDoc(docId: string): Promise<CommandResult<DocResult>> {
   try {
-    const auth = getAuthClient();
+    const auth = await getAuthClient();
     const docs = google.docs({ version: "v1", auth });
 
     // Get document metadata + body

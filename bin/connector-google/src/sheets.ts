@@ -10,7 +10,7 @@ export async function getSheet(
   range?: string,
 ): Promise<CommandResult<SheetResult>> {
   try {
-    const sheets = google.sheets({ version: "v4", auth: getAuthClient() });
+    const sheets = google.sheets({ version: "v4", auth: await getAuthClient() });
 
     // Get spreadsheet metadata
     const metaResp = await sheets.spreadsheets.get({ spreadsheetId });
