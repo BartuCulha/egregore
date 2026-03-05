@@ -604,7 +604,8 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
             sb.revoke_api_key(slug)  # Idempotent: revoke any old keys before creating new
             sb.create_api_key(slug, api_key)
             sb.upsert_user(user["login"], github_name=user.get("name"), avatar_url=user.get("avatar_url"))
-            sb.add_membership(slug, user["login"], role="admin")
+            sb.add_membership(slug, user["login"], role="admin",
+                              coder_username=user["login"] if body.hosting else None)
             logger.info(f"Supabase org bootstrapped for {slug}")
         except Exception as e:
             logger.error(f"Supabase org bootstrap failed: {e}")
@@ -804,6 +805,8 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
     # Register user + membership in Supabase immediately (don't defer to session-start)
+    # If org has hosting, set coder_username so terminal URL works on dashboard
+    coder_username_for_join = None
     if USE_SUPABASE:
         try:
             from .services.supabase import upsert_user, add_membership
@@ -812,7 +815,35 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
                 github_name=user.get("name"),
                 avatar_url=user.get("avatar_url"),
             )
-            add_membership(slug, user["login"], role="member")
+            # Check if org has hosting — set coder_username if so
+            try:
+                from .services import supabase as sb_join
+                org_row = sb_join.get_client().table("orgs").select(
+                    "hosting_enabled, hosting_coder_url, hosting_coder_token"
+                ).eq("slug", slug).execute()
+                if org_row.data and org_row.data[0].get("hosting_enabled"):
+                    coder_username_for_join = user["login"]
+                    # Also create Coder user + workspace
+                    coder_url = org_row.data[0].get("hosting_coder_url", "")
+                    coder_token = org_row.data[0].get("hosting_coder_token", "")
+                    if coder_url and coder_token:
+                        from .services.coder import CoderClient
+                        coder_client = CoderClient(coder_url, coder_token)
+                        try:
+                            await coder_client.create_user(
+                                username=user["login"],
+                                email=f"{user['login']}@users.noreply.github.com",
+                                name=user.get("name", user["login"]),
+                            )
+                            await coder_client.create_workspace(owner=user["login"])
+                            logger.info(f"Join: created Coder user+workspace for {user['login']} on {slug}")
+                        except Exception as ce:
+                            logger.warning(f"Join: Coder setup failed for {user['login']}: {ce}")
+            except Exception as he:
+                logger.warning(f"Join: hosting check failed: {he}")
+
+            add_membership(slug, user["login"], role="member",
+                          coder_username=coder_username_for_join)
             logger.info(f"Join: registered {user['login']} in Supabase for {slug}")
         except Exception as e:
             logger.warning(f"Join: Supabase registration failed for {user['login']}: {e}")
@@ -1826,6 +1857,15 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
                     # Create workspace (so it's ready when they click "Open in browser")
                     ws_result = await coder_client.create_workspace(owner=github_username)
                     logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
+                    # Store coder_username on membership so terminal URL works
+                    try:
+                        sb.get_client().table("memberships").update(
+                            {"coder_username": github_username}
+                        ).eq("org_slug", slug).eq(
+                            "user_id", sb.get_user_by_github(github_username)["id"]
+                        ).execute()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning(f"Failed to create Coder user/workspace for {user['login']}: {e}")
 
@@ -2816,7 +2856,9 @@ async def admin_patch_org(
     if not org_row:
         raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
 
-    allowed = {"created_at", "name", "transcript_sharing"}
+    allowed = {"created_at", "name", "transcript_sharing",
+                "hosting_enabled", "hosting_ip", "hosting_coder_url",
+                "hosting_coder_token", "hosting_server_id"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
@@ -2824,6 +2866,34 @@ async def admin_patch_org(
     try:
         sb.get_client().table("orgs").update(updates).eq("slug", slug).execute()
         return {"patched": list(updates.keys()), "slug": slug}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
+
+
+@app.patch("/api/admin/org/{slug}/members/{username}")
+async def admin_patch_member(
+    slug: str,
+    username: str,
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Patch membership fields. Platform admin only."""
+    from .services import supabase as sb
+
+    allowed = {"role", "coder_username", "status"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
+
+    user = sb.get_user_by_github(username)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {username}")
+
+    try:
+        sb.get_client().table("memberships").update(updates).eq(
+            "org_slug", slug
+        ).eq("user_id", user["id"]).execute()
+        return {"patched": list(updates.keys()), "slug": slug, "username": username}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
 
@@ -3700,15 +3770,17 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
 
-    # Verify caller is admin of this org
+    # Verify caller is admin of this org or platform admin
+    is_platform_admin = github_username.lower() in {u.lower() for u in ADMIN_USERS}
     user = sb.get_user_by_github(github_username)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    membership = sb.get_client().table("memberships").select("role").eq(
-        "org_slug", slug
-    ).eq("user_id", user["id"]).eq("status", "active").execute()
-    if not membership.data or membership.data[0].get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only org admins can enable hosting")
+    if not is_platform_admin:
+        membership = sb.get_client().table("memberships").select("role").eq(
+            "org_slug", slug
+        ).eq("user_id", user["id"]).eq("status", "active").execute()
+        if not membership.data or membership.data[0].get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only org admins can enable hosting")
 
     # Get org info
     org_rows = sb.get_client().table("orgs").select("*").eq("slug", slug).execute()
@@ -3761,6 +3833,21 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
         if result.get("coder_password"):
             update_data["hosting_coder_password"] = result["coder_password"]
         sb.get_client().table("orgs").update(update_data).eq("slug", slug).execute()
+
+    # Backfill coder_username for all existing active members
+    try:
+        members = sb.get_client().table("memberships").select(
+            "user_id, users!inner(github_username)"
+        ).eq("org_slug", slug).eq("status", "active").is_("coder_username", "null").execute()
+        for mem in (members.data or []):
+            gh_user = mem.get("users", {}).get("github_username", "")
+            if gh_user:
+                sb.get_client().table("memberships").update(
+                    {"coder_username": gh_user}
+                ).eq("org_slug", slug).eq("user_id", mem["user_id"]).execute()
+        logger.info(f"Backfilled coder_username for {len(members.data or [])} members on {slug}")
+    except Exception as e:
+        logger.warning(f"coder_username backfill failed for {slug}: {e}")
 
     logger.info(f"{github_username} enabled hosting for {slug}")
     return {"status": "provisioning", "ip": result.get("ip"), "slug": slug}
