@@ -5,8 +5,8 @@ import type { CommandResult, GmailListResult, GmailMessage } from "./types.js";
 import { getAuthClient } from "./auth.js";
 import { cacheItem, cacheList } from "./context.js";
 
-function getGmailClient() {
-  return google.gmail({ version: "v1", auth: getAuthClient() });
+async function getGmailClient() {
+  return google.gmail({ version: "v1", auth: await getAuthClient() });
 }
 
 export async function listMessages(opts: {
@@ -21,7 +21,7 @@ export async function listMessages(opts: {
   q = q.trim();
 
   try {
-    const gmail = getGmailClient();
+    const gmail = await getGmailClient();
     const listResp = await gmail.users.messages.list({
       userId: "me",
       maxResults,
@@ -73,7 +73,7 @@ export async function listMessages(opts: {
 
 export async function getMessage(messageId: string): Promise<CommandResult<GmailMessage>> {
   try {
-    const gmail = getGmailClient();
+    const gmail = await getGmailClient();
     const resp = await gmail.users.messages.get({
       userId: "me",
       id: messageId,
@@ -123,7 +123,7 @@ export async function getMessage(messageId: string): Promise<CommandResult<Gmail
 
 export async function searchMessages(query: string): Promise<CommandResult<GmailListResult>> {
   try {
-    const gmail = getGmailClient();
+    const gmail = await getGmailClient();
     const listResp = await gmail.users.messages.list({
       userId: "me",
       maxResults: 10,

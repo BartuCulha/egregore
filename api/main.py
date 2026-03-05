@@ -4123,6 +4123,20 @@ async def user_keys_fetch(
 # =============================================================================
 
 
+@app.get("/api/connectors/google/credentials")
+async def google_credentials(org: dict = Depends(validate_api_key)):
+    """Return Google OAuth Client ID + Secret for local connector auth.
+
+    Credentials are shared across all orgs — they identify the Egregore app,
+    not the user or org. Each user authenticates with their own Google account.
+    Self-hosted orgs can override via GOOGLE_CLIENT_ID/SECRET in their .env.
+    """
+    from .services.google import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Google OAuth credentials not configured on server")
+    return {"client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET}
+
+
 @app.get("/api/connectors/google/auth-url")
 async def google_auth_url(org: dict = Depends(validate_api_key)):
     """Get Google OAuth consent URL (for hosted deployments)."""
