@@ -3819,6 +3819,56 @@ async def hosting_info(slug: str, authorization: str = Header(...)):
     return result
 
 
+@app.get("/api/hosting/terminal/{slug}")
+async def hosting_terminal_url(slug: str, github_username: str = Depends(validate_github_token)):
+    """Generate a short-lived Coder token and return the terminal URL.
+
+    Flow: user clicks "Open in Browser" on egregore.xyz → frontend calls this →
+    we create a 10-minute Coder API key → return URL with ?coder_session_token=...
+    Frontend opens URL in new tab. User lands directly in terminal, zero login.
+    """
+    from .services.coder import CoderClient
+    from .services import supabase as sb
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    # Look up org hosting info
+    rows = sb.get_client().table("orgs").select(
+        "hosting_enabled, hosting_coder_url, hosting_coder_token"
+    ).eq("slug", slug).execute()
+    if not rows.data or not rows.data[0].get("hosting_enabled"):
+        raise HTTPException(status_code=404, detail="Hosting not enabled for this org")
+
+    coder_url = (rows.data[0].get("hosting_coder_url") or "").rstrip("/")
+    coder_token = rows.data[0].get("hosting_coder_token") or ""
+    if not coder_url or not coder_token:
+        raise HTTPException(status_code=503, detail="Coder not ready")
+
+    # Look up user's coder_username from their membership
+    user = sb.get_user_by_github(github_username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    membership = sb.get_client().table("memberships").select(
+        "coder_username"
+    ).eq("org_slug", slug).eq("user_id", user["id"]).eq("status", "active").execute()
+
+    coder_username = ""
+    if membership.data:
+        coder_username = membership.data[0].get("coder_username") or ""
+    if not coder_username:
+        return {"url": coder_url}
+
+    # Create a short-lived token for this user on Coder
+    client = CoderClient(coder_url, coder_token)
+    token = await client.create_user_token(coder_username, lifetime_seconds=600)
+    if not token:
+        return {"url": f"{coder_url}/@{coder_username}/egregore/terminal"}
+
+    return {"url": f"{coder_url}/@{coder_username}/egregore/terminal?coder_session_token={token}"}
+
+
 # =============================================================================
 # USER API KEYS
 # =============================================================================
