@@ -3687,6 +3687,85 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
     return result
 
 
+@app.post("/api/hosting/enable/{slug}")
+async def hosting_enable(slug: str, github_username: str = Depends(validate_github_token)):
+    """Enable hosted Coder for an existing org. Org admin only.
+
+    Derives fork_url, memory_url from existing Supabase org data.
+    Provisions VPS, stores hosting info.
+    """
+    from .services.hosting import provision_vps
+    from .services import supabase as sb
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    # Verify caller is admin of this org
+    user = sb.get_user_by_github(github_username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    membership = sb.get_client().table("memberships").select("role").eq(
+        "org_slug", slug
+    ).eq("user_id", user["id"]).eq("status", "active").execute()
+    if not membership.data or membership.data[0].get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only org admins can enable hosting")
+
+    # Get org info
+    org_rows = sb.get_client().table("orgs").select("*").eq("slug", slug).execute()
+    if not org_rows.data:
+        raise HTTPException(status_code=404, detail="Org not found")
+    org = org_rows.data[0]
+
+    if org.get("hosting_enabled"):
+        raise HTTPException(status_code=400, detail="Hosting already enabled")
+
+    github_org = org.get("github_org", "")
+    org_name = org.get("name", slug)
+    repo_name = org.get("repo_name", "egregore-core")
+
+    # Get org's API key
+    org_config = ORG_CONFIGS.get(slug)
+    egregore_api_key = ""
+    if org_config:
+        egregore_api_key = await _get_org_api_key(org_config, slug)
+
+    api_url = ""
+    if org_config:
+        api_url = org_config.get("api_url", os.environ.get("EGREGORE_API_URL", ""))
+    if not api_url:
+        api_url = os.environ.get("EGREGORE_API_URL", "https://egregore-production-55f2.up.railway.app")
+
+    # Provision VPS
+    result = await provision_vps(
+        org_slug=slug,
+        org_name=org_name,
+        github_org=github_org,
+        repo_name=repo_name,
+        fork_url=f"https://github.com/{github_org}/{repo_name}.git",
+        memory_url=f"https://github.com/{github_org}/{github_org}-memory.git",
+        api_url=api_url,
+        egregore_api_key=egregore_api_key,
+    )
+
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Store VPS info in Supabase
+    if result.get("ip"):
+        update_data = {
+            "hosting_ip": result["ip"],
+            "hosting_server_id": str(result.get("server_id", "")),
+            "hosting_coder_url": result.get("coder_url", ""),
+            "hosting_enabled": True,
+        }
+        if result.get("coder_password"):
+            update_data["hosting_coder_password"] = result["coder_password"]
+        sb.get_client().table("orgs").update(update_data).eq("slug", slug).execute()
+
+    logger.info(f"{github_username} enabled hosting for {slug}")
+    return {"status": "provisioning", "ip": result.get("ip"), "slug": slug}
+
+
 @app.get("/api/hosting/status/{slug}")
 async def hosting_status(slug: str, authorization: str = Header(...)):
     """Check VPS health + Coder readiness for an org. Any authenticated GitHub user.
