@@ -1,0 +1,281 @@
+terraform {
+  required_providers {
+    coder = {
+      source = "coder/coder"
+    }
+    docker = {
+      source = "kreuzwerker/docker"
+    }
+  }
+}
+
+provider "coder" {}
+provider "docker" {}
+
+data "coder_workspace" "me" {}
+data "coder_workspace_owner" "me" {}
+
+# Require GitHub external auth — prompts user to link GitHub
+# and makes GIT_ASKPASS available for private repo cloning
+data "coder_external_auth" "github" {
+  id = "github"
+}
+
+# ─── Docker image (Ubuntu base — deps installed in startup) ─────
+
+resource "docker_image" "workspace" {
+  name = "ubuntu:24.04"
+}
+
+# ─── Container ───────────────────────────────────────────────────
+
+resource "docker_container" "workspace" {
+  count = data.coder_workspace.me.start_count
+  name  = "coder-${data.coder_workspace_owner.me.name}-${lower(data.coder_workspace.me.name)}"
+  image = docker_image.workspace.image_id
+
+  env = [
+    "CODER_AGENT_TOKEN=${coder_agent.main.token}",
+  ]
+
+  host {
+    host = "host.docker.internal"
+    ip   = "host-gateway"
+  }
+
+  # Persistent home directory across workspace restarts
+  volumes {
+    volume_name    = "coder-${data.coder_workspace_owner.me.name}-${lower(data.coder_workspace.me.name)}-home"
+    container_path = "/home/coder"
+    read_only      = false
+  }
+
+  # Mount host org config (written by cloud-init during VPS provisioning)
+  volumes {
+    host_path      = "/opt/egregore"
+    container_path = "/opt/egregore"
+    read_only      = true
+  }
+
+  # Install curl first (needed for agent download), create user, then start agent AS coder
+  command = ["sh", "-c", <<-EOT
+    # Install curl (minimal — needed for coder agent download)
+    apt-get update -qq && apt-get install -y -qq curl sudo > /dev/null 2>&1
+
+    # Create user if not exists
+    if ! id coder >/dev/null 2>&1; then
+      useradd -m -s /bin/bash coder
+      mkdir -p /etc/sudoers.d
+      echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder
+      chmod 0440 /etc/sudoers.d/coder
+    fi
+
+    # Fix DNS for Docker
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+    # Ensure coder owns its home directory (Docker volume starts as root)
+    chown coder:coder /home/coder
+
+    # Start the Coder agent as coder user (so terminal opens as coder, not root)
+    exec su coder -c '${replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")}'
+  EOT
+  ]
+}
+
+# ─── Coder agent ─────────────────────────────────────────────────
+
+resource "coder_agent" "main" {
+  os   = "linux"
+  arch = "arm64"
+  dir  = "/home/coder"
+
+  # Inject GitHub token from Coder external auth into agent environment
+  # session-start.sh reads this from .env for identity detection
+  env = {
+    GITHUB_TOKEN = data.coder_external_auth.github.access_token
+  }
+
+  display_apps {
+    vscode                = false
+    vscode_insiders       = false
+    web_terminal          = true
+    ssh_helper            = true
+    port_forwarding_helper = true
+  }
+
+  startup_script_behavior = "non-blocking"
+
+  startup_script = <<-EOT
+    #!/bin/bash
+    set -e
+
+    # Install full deps if not already present
+    if ! command -v git &>/dev/null; then
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq git jq ca-certificates gnupg zsh unzip > /dev/null 2>&1
+
+      # GitHub CLI
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      sudo apt-get update -qq && sudo apt-get install -y -qq gh > /dev/null 2>&1
+
+      # Node.js 20
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - > /dev/null 2>&1
+      sudo apt-get install -y -qq nodejs > /dev/null 2>&1
+    fi
+
+    # Install/update Claude Code (official installer handles updates)
+    curl -fsSL https://claude.ai/install.sh | sh > /dev/null 2>&1
+
+    # Ensure .bash_profile sources .bashrc (login shells don't read .bashrc directly)
+    if [ ! -f /home/coder/.bash_profile ]; then
+      cat > /home/coder/.bash_profile <<'PROFILEEOF'
+# Source .bashrc for login shells (Coder web terminal uses bash -l)
+if [ -f "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+PROFILEEOF
+      chown coder:coder /home/coder/.bash_profile
+    fi
+
+    # Write the bootstrap + auto-start script into .bashrc
+    # This runs on first terminal open (when Coder has the user's GitHub OAuth token)
+    if ! grep -q "EGREGORE_BOOTSTRAP" /home/coder/.bashrc 2>/dev/null; then
+      cat >> /home/coder/.bashrc <<'BASHEOF'
+
+# ─── Egregore workspace bootstrap ───────────────────────────────
+# Runs on first terminal open. Clones repos using Coder's GitHub OAuth.
+# EGREGORE_BOOTSTRAP
+_egregore_bootstrap() {
+  local ORG_CONFIG="/opt/egregore/org-config.json"
+  [ ! -f "$ORG_CONFIG" ] && return
+
+  local ORG_SLUG FORK_URL MEMORY_URL API_URL API_KEY ORG_NAME GITHUB_ORG REPO_NAME MANAGED_REPOS
+  ORG_SLUG=$(jq -r '.org_slug' "$ORG_CONFIG")
+  FORK_URL=$(jq -r '.fork_url' "$ORG_CONFIG")
+  MEMORY_URL=$(jq -r '.memory_url' "$ORG_CONFIG")
+  API_URL=$(jq -r '.api_url' "$ORG_CONFIG")
+  API_KEY=$(jq -r '.egregore_api_key' "$ORG_CONFIG")
+  ORG_NAME=$(jq -r '.org_name' "$ORG_CONFIG")
+  GITHUB_ORG=$(jq -r '.github_org' "$ORG_CONFIG")
+  REPO_NAME=$(jq -r '.repo_name' "$ORG_CONFIG")
+  MANAGED_REPOS=$(jq -r '.managed_repos // ""' "$ORG_CONFIG")
+
+  # Clone repos if not present (Coder's GIT_ASKPASS provides GitHub OAuth token)
+  if [ ! -d "$HOME/egregore/.git" ] && [ "$FORK_URL" != "null" ] && [ -n "$FORK_URL" ]; then
+    echo "Cloning egregore repo..."
+    git clone "$FORK_URL" "$HOME/egregore" 2>&1 || true
+  fi
+  if [ ! -d "$HOME/memory/.git" ] && [ "$MEMORY_URL" != "null" ] && [ -n "$MEMORY_URL" ]; then
+    echo "Cloning memory repo..."
+    git clone "$MEMORY_URL" "$HOME/memory" 2>&1 || true
+  fi
+
+  # Clone managed repos
+  if [ -n "$MANAGED_REPOS" ] && [ "$MANAGED_REPOS" != "null" ]; then
+    IFS=',' read -ra REPOS <<< "$MANAGED_REPOS"
+    for repo in "$${REPOS[@]}"; do
+      repo=$(echo "$repo" | xargs)
+      [ -z "$repo" ] && continue
+      if [ ! -d "$HOME/$repo/.git" ]; then
+        echo "Cloning $repo..."
+        git clone "https://github.com/$${GITHUB_ORG}/$repo.git" "$HOME/$repo" 2>&1 || true
+      fi
+    done
+  fi
+
+  # Create memory symlink
+  if [ -d "$HOME/memory" ] && [ -d "$HOME/egregore" ]; then
+    ln -sfn "$HOME/memory" "$HOME/egregore/memory"
+  fi
+
+  # Build managed repos JSON array
+  local MANAGED_JSON="[]"
+  if [ -n "$MANAGED_REPOS" ] && [ "$MANAGED_REPOS" != "null" ]; then
+    MANAGED_JSON=$(echo "$MANAGED_REPOS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF{printf "%s\"%s\"", (NR>1?",":""), $0}' | sed 's/^/[/;s/$/]/')
+  fi
+
+  # Write egregore.json
+  if [ -d "$HOME/egregore" ]; then
+    cat > "$HOME/egregore/egregore.json" <<EJSON
+{
+  "org_name": "$ORG_NAME",
+  "github_org": "$GITHUB_ORG",
+  "memory_repo": "$MEMORY_URL",
+  "api_url": "$API_URL",
+  "repo_name": "$REPO_NAME",
+  "slug": "$ORG_SLUG",
+  "repos": $MANAGED_JSON
+}
+EJSON
+  fi
+
+  # Write .env
+  if [ -d "$HOME/egregore" ]; then
+    cat > "$HOME/egregore/.env" <<EENV
+GITHUB_TOKEN=$GITHUB_TOKEN
+EGREGORE_API_KEY=$API_KEY
+ANTHROPIC_API_KEY=
+EENV
+    chmod 600 "$HOME/egregore/.env"
+  fi
+
+  # Commit egregore.json locally so workspace starts clean (no "unsaved on develop")
+  if [ -d "$HOME/egregore/.git" ]; then
+    cd "$HOME/egregore"
+    git add egregore.json 2>/dev/null || true
+    git diff --cached --quiet 2>/dev/null || git commit -m "Configure workspace for $ORG_NAME" --quiet 2>/dev/null || true
+    cd "$HOME"
+  fi
+
+}
+
+# Convenience alias
+alias egregore='cd ~/egregore && claude "start"'
+
+# Auto-bootstrap + auto-start on first interactive login
+if [ -z "$EGREGORE_STARTED" ] && [ -t 0 ]; then
+  export EGREGORE_STARTED=1
+
+  # Wait for startup script to finish installing deps (runs non-blocking)
+  if ! command -v jq &>/dev/null || ! command -v claude &>/dev/null; then
+    echo "Preparing workspace..."
+    for i in $(seq 1 90); do
+      command -v jq &>/dev/null && command -v claude &>/dev/null && break
+      sleep 2
+    done
+  fi
+
+  # Bootstrap workspace (clone repos, write config) if needed
+  if command -v jq &>/dev/null && [ ! -d "$HOME/egregore/.git" ]; then
+    _egregore_bootstrap
+  fi
+
+  # Start Egregore if workspace is ready
+  # session-start.sh (Claude's SessionStart hook) handles the full greeting
+  if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
+    cd ~/egregore
+    exec claude "start"
+  fi
+fi
+BASHEOF
+      chown coder:coder /home/coder/.bashrc
+    fi
+
+    echo "Workspace ready"
+  EOT
+
+  metadata {
+    key          = "org"
+    display_name = "Egregore"
+    script       = "jq -r '.org_name' /home/coder/egregore/egregore.json 2>/dev/null || echo 'initializing...'"
+    interval     = 30
+  }
+
+  metadata {
+    key          = "branch"
+    display_name = "Branch"
+    script       = "cd /home/coder/egregore 2>/dev/null && git branch --show-current 2>/dev/null || echo '-'"
+    interval     = 10
+  }
+}
