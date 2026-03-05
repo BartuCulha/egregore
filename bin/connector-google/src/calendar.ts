@@ -5,8 +5,8 @@ import type { CommandResult, CalendarListResult, CalendarEvent } from "./types.j
 import { getAuthClient } from "./auth.js";
 import { cacheItem, cacheList } from "./context.js";
 
-function getCalendarClient() {
-  return google.calendar({ version: "v3", auth: getAuthClient() });
+async function getCalendarClient() {
+  return google.calendar({ version: "v3", auth: await getAuthClient() });
 }
 
 export async function listEvents(opts: {
@@ -19,7 +19,7 @@ export async function listEvents(opts: {
   const timeMax = opts.until ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const calendar = getCalendarClient();
+    const calendar = await getCalendarClient();
     const resp = await calendar.events.list({
       calendarId,
       timeMin,
@@ -46,7 +46,7 @@ export async function getEvent(
   const cal = calendarId ?? "primary";
 
   try {
-    const calendar = getCalendarClient();
+    const calendar = await getCalendarClient();
     const resp = await calendar.events.get({ calendarId: cal, eventId });
     const event = normalizeEvent(resp.data);
 

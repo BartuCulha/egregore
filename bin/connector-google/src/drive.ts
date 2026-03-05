@@ -5,8 +5,8 @@ import type { CommandResult, DriveListResult, DriveFileResult, DriveFile } from 
 import { getAuthClient } from "./auth.js";
 import { cacheItem, cacheList } from "./context.js";
 
-function getDriveClient() {
-  return google.drive({ version: "v3", auth: getAuthClient() });
+async function getDriveClient() {
+  return google.drive({ version: "v3", auth: await getAuthClient() });
 }
 
 export async function listFiles(opts: {
@@ -20,7 +20,7 @@ export async function listFiles(opts: {
   }
 
   try {
-    const drive = getDriveClient();
+    const drive = await getDriveClient();
     const resp = await drive.files.list({
       pageSize,
       q,
@@ -40,7 +40,7 @@ export async function listFiles(opts: {
 
 export async function getFile(fileId: string): Promise<CommandResult<DriveFileResult>> {
   try {
-    const drive = getDriveClient();
+    const drive = await getDriveClient();
 
     const metaResp = await drive.files.get({
       fileId,
@@ -91,7 +91,7 @@ export async function getFile(fileId: string): Promise<CommandResult<DriveFileRe
 
 export async function searchFiles(query: string): Promise<CommandResult<DriveListResult>> {
   try {
-    const drive = getDriveClient();
+    const drive = await getDriveClient();
     const resp = await drive.files.list({
       pageSize: 25,
       q: `fullText contains '${query.replace(/'/g, "\\'")}' and trashed = false`,
