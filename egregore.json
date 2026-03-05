@@ -1,9 +1,16 @@
 {
   "org_name": "Curve Labs",
   "github_org": "Curve-Labs",
-  "memory_repo": "https://github.com/Curve-Labs/curve-labs-memory.git",
+  "memory_repo": "https://github.com/Curve-Labs/Curve-Labs-memory.git",
   "api_url": "https://egregore-production-55f2.up.railway.app",
   "repo_name": "egregore",
   "slug": "curvelabs",
-  "repos": ["lace", "egregore-site"]
+  "repos": [],
+  "connectors": {
+    "google": {
+      "enabled": true,
+      "services": ["drive", "gmail", "calendar", "docs", "sheets"],
+      "scopes": {}
+    }
+  }
 }
