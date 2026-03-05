@@ -2856,7 +2856,9 @@ async def admin_patch_org(
     if not org_row:
         raise HTTPException(status_code=404, detail=f"Org not found: {slug}")
 
-    allowed = {"created_at", "name", "transcript_sharing"}
+    allowed = {"created_at", "name", "transcript_sharing",
+                "hosting_enabled", "hosting_ip", "hosting_coder_url",
+                "hosting_coder_token", "hosting_server_id"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
@@ -2864,6 +2866,34 @@ async def admin_patch_org(
     try:
         sb.get_client().table("orgs").update(updates).eq("slug", slug).execute()
         return {"patched": list(updates.keys()), "slug": slug}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
+
+
+@app.patch("/api/admin/org/{slug}/members/{username}")
+async def admin_patch_member(
+    slug: str,
+    username: str,
+    body: dict,
+    admin_user: str = Depends(validate_admin_github_token),
+):
+    """Patch membership fields. Platform admin only."""
+    from .services import supabase as sb
+
+    allowed = {"role", "coder_username", "status"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
+
+    user = sb.get_user_by_github(username)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {username}")
+
+    try:
+        sb.get_client().table("memberships").update(updates).eq(
+            "org_slug", slug
+        ).eq("user_id", user["id"]).execute()
+        return {"patched": list(updates.keys()), "slug": slug, "username": username}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
 
@@ -3740,15 +3770,17 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
 
-    # Verify caller is admin of this org
+    # Verify caller is admin of this org or platform admin
+    is_platform_admin = github_username.lower() in {u.lower() for u in ADMIN_USERS}
     user = sb.get_user_by_github(github_username)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    membership = sb.get_client().table("memberships").select("role").eq(
-        "org_slug", slug
-    ).eq("user_id", user["id"]).eq("status", "active").execute()
-    if not membership.data or membership.data[0].get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only org admins can enable hosting")
+    if not is_platform_admin:
+        membership = sb.get_client().table("memberships").select("role").eq(
+            "org_slug", slug
+        ).eq("user_id", user["id"]).eq("status", "active").execute()
+        if not membership.data or membership.data[0].get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only org admins can enable hosting")
 
     # Get org info
     org_rows = sb.get_client().table("orgs").select("*").eq("slug", slug).execute()
