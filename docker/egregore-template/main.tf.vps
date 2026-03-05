@@ -109,8 +109,11 @@ resource "coder_agent" "main" {
     #!/bin/bash
     set -e
 
+    echo "=== Startup begin ==="
+
     # Install full deps if not already present
     if ! command -v git &>/dev/null; then
+      echo "Installing system deps..."
       sudo apt-get update -qq
       sudo apt-get install -y -qq git jq ca-certificates gnupg zsh unzip > /dev/null 2>&1
 
@@ -122,10 +125,32 @@ resource "coder_agent" "main" {
       # Node.js 20
       curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - > /dev/null 2>&1
       sudo apt-get install -y -qq nodejs > /dev/null 2>&1
+      echo "System deps installed"
+    else
+      echo "System deps already present"
     fi
 
-    # Install/update Claude Code (official installer handles updates)
-    curl -fsSL https://claude.ai/install.sh | sh > /dev/null 2>&1
+    # Install/update Claude Code (official installer, non-fatal)
+    # Must use bash — the install script uses bash syntax (arrays, etc.)
+    echo "Installing Claude Code..."
+    curl -fsSL https://claude.ai/install.sh | bash 2>&1 || echo "Claude Code install returned non-zero (may be ok)"
+
+    # Find claude binary (installer may put it in ~/.local/bin or ~/.claude/bin)
+    CLAUDE_BIN=""
+    if [ -f "$HOME/.local/bin/claude" ]; then
+      CLAUDE_BIN="$HOME/.local/bin/claude"
+    elif [ -f "$HOME/.claude/bin/claude" ]; then
+      CLAUDE_BIN="$HOME/.claude/bin/claude"
+    fi
+    echo "Claude binary: $CLAUDE_BIN"
+
+    # Symlink to system PATH so .bashrc bootstrap finds it
+    if [ -n "$CLAUDE_BIN" ]; then
+      sudo ln -sf "$CLAUDE_BIN" /usr/local/bin/claude 2>/dev/null || true
+      echo "Symlink: /usr/local/bin/claude -> $CLAUDE_BIN"
+    else
+      echo "WARNING: Claude binary not found anywhere"
+    fi
 
     # Ensure .bash_profile sources .bashrc (login shells don't read .bashrc directly)
     if [ ! -f /home/coder/.bash_profile ]; then
@@ -138,14 +163,18 @@ PROFILEEOF
       chown coder:coder /home/coder/.bash_profile
     fi
 
-    # Write the bootstrap + auto-start script into .bashrc
-    # This runs on first terminal open (when Coder has the user's GitHub OAuth token)
-    if ! grep -q "EGREGORE_BOOTSTRAP" /home/coder/.bashrc 2>/dev/null; then
-      cat >> /home/coder/.bashrc <<'BASHEOF'
+    # Ensure Claude Code PATH is in .bashrc (idempotent)
+    # Cover both possible install locations
+    if ! grep -q 'local/bin' /home/coder/.bashrc 2>/dev/null; then
+      echo 'export PATH="$HOME/.local/bin:$HOME/.claude/bin:$PATH"' >> /home/coder/.bashrc
+    fi
 
-# ─── Egregore workspace bootstrap ───────────────────────────────
-# Runs on first terminal open. Clones repos using Coder's GitHub OAuth.
-# EGREGORE_BOOTSTRAP
+    # ─── Bootstrap script (separate file, always overwritten) ─────
+    # Moving bootstrap to a separate file so updates don't depend on
+    # whether the old block exists in .bashrc
+    cat > /home/coder/.egregore-bootstrap.sh <<'BOOTEOF'
+#!/bin/bash
+# EGREGORE_BOOTSTRAP_v5
 _egregore_bootstrap() {
   local ORG_CONFIG="/opt/egregore/org-config.json"
   [ ! -f "$ORG_CONFIG" ] && return
@@ -238,29 +267,67 @@ if [ -z "$EGREGORE_STARTED" ] && [ -t 0 ]; then
   export EGREGORE_STARTED=1
 
   # Wait for startup script to finish installing deps (runs non-blocking)
-  if ! command -v jq &>/dev/null || ! command -v claude &>/dev/null; then
+  # Check for actual file paths, not just command -v (more reliable)
+  _claude_ready() {
+    [ -f "$HOME/.local/bin/claude" ] || [ -f "$HOME/.claude/bin/claude" ] || [ -f "/usr/local/bin/claude" ]
+  }
+  _jq_ready() {
+    command -v jq &>/dev/null
+  }
+
+  if ! _jq_ready || ! _claude_ready; then
     echo "Preparing workspace..."
     for i in $(seq 1 90); do
-      command -v jq &>/dev/null && command -v claude &>/dev/null && break
+      _jq_ready && _claude_ready && break
       sleep 2
     done
   fi
 
   # Bootstrap workspace (clone repos, write config) if needed
-  if command -v jq &>/dev/null && [ ! -d "$HOME/egregore/.git" ]; then
+  if _jq_ready && [ ! -d "$HOME/egregore/.git" ]; then
     _egregore_bootstrap
   fi
 
   # Start Egregore if workspace is ready
   # session-start.sh (Claude's SessionStart hook) handles the full greeting
-  if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
+  if [ -d "$HOME/egregore" ] && _claude_ready; then
+    # Ensure claude is in PATH for this session
+    export PATH="$HOME/.local/bin:$HOME/.claude/bin:$PATH"
     cd ~/egregore
     exec claude "start"
   fi
 fi
-BASHEOF
-      chown coder:coder /home/coder/.bashrc
+BOOTEOF
+    chown coder:coder /home/coder/.egregore-bootstrap.sh
+    chmod +x /home/coder/.egregore-bootstrap.sh
+    echo "Bootstrap script written to ~/.egregore-bootstrap.sh"
+
+    # Clean old inline bootstrap from .bashrc and add source line
+    # Remove old EGREGORE_BOOTSTRAP block if it exists inline
+    if grep -q "EGREGORE_BOOTSTRAP" /home/coder/.bashrc 2>/dev/null && ! grep -q "egregore-bootstrap.sh" /home/coder/.bashrc 2>/dev/null; then
+      echo "Cleaning old inline bootstrap from .bashrc..."
+      # Remove from "# ─── Egregore workspace bootstrap" to end of file
+      MARKER_LINE=$(grep -n "# ─── Egregore workspace bootstrap" /home/coder/.bashrc 2>/dev/null | head -1 | cut -d: -f1)
+      if [ -n "$MARKER_LINE" ]; then
+        # Keep everything before the marker (minus 1 for the blank line before it)
+        KEEP_TO=$((MARKER_LINE - 2))
+        if [ "$KEEP_TO" -gt 0 ]; then
+          head -n "$KEEP_TO" /home/coder/.bashrc > /tmp/.bashrc.clean
+        else
+          echo "" > /tmp/.bashrc.clean
+        fi
+        mv /tmp/.bashrc.clean /home/coder/.bashrc
+        echo "Old bootstrap block removed"
+      fi
     fi
+
+    # Add source line for new bootstrap (idempotent)
+    if ! grep -q 'egregore-bootstrap.sh' /home/coder/.bashrc 2>/dev/null; then
+      echo '' >> /home/coder/.bashrc
+      echo '# Egregore bootstrap (loaded from separate file for clean updates)' >> /home/coder/.bashrc
+      echo '[ -f "$HOME/.egregore-bootstrap.sh" ] && source "$HOME/.egregore-bootstrap.sh"' >> /home/coder/.bashrc
+    fi
+    chown coder:coder /home/coder/.bashrc
 
     echo "Workspace ready"
   EOT
