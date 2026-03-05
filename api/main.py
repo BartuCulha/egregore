@@ -3988,13 +3988,12 @@ async def hosting_info(slug: str, authorization: str = Header(...)):
 
 @app.get("/api/hosting/terminal/{slug}")
 async def hosting_terminal_url(slug: str, github_username: str = Depends(validate_github_token)):
-    """Generate a short-lived Coder token and return the terminal URL.
+    """Return the terminal URL for this user's hosted workspace.
 
     Flow: user clicks "Open in Browser" on egregore.xyz → frontend calls this →
-    we create a 10-minute Coder API key → return URL with ?coder_session_token=...
-    Frontend opens URL in new tab. User lands directly in terminal, zero login.
+    we return the direct terminal URL. Coder handles auth via GitHub OAuth
+    (one-time login, session cookie persists).
     """
-    from .services.coder import CoderClient
     from .services import supabase as sb
 
     if not USE_SUPABASE:
@@ -4002,14 +4001,13 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
 
     # Look up org hosting info
     rows = sb.get_client().table("orgs").select(
-        "hosting_enabled, hosting_coder_url, hosting_coder_token"
+        "hosting_enabled, hosting_coder_url"
     ).eq("slug", slug).execute()
     if not rows.data or not rows.data[0].get("hosting_enabled"):
         raise HTTPException(status_code=404, detail="Hosting not enabled for this org")
 
     coder_url = (rows.data[0].get("hosting_coder_url") or "").rstrip("/")
-    coder_token = rows.data[0].get("hosting_coder_token") or ""
-    if not coder_url or not coder_token:
+    if not coder_url:
         raise HTTPException(status_code=503, detail="Coder not ready")
 
     # Look up user's coder_username from their membership
@@ -4027,13 +4025,7 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
     if not coder_username:
         return {"url": coder_url}
 
-    # Create a short-lived token for this user on Coder
-    client = CoderClient(coder_url, coder_token)
-    token = await client.create_user_token(coder_username, lifetime_seconds=600)
-    if not token:
-        return {"url": f"{coder_url}/@{coder_username}/egregore/terminal"}
-
-    return {"url": f"{coder_url}/@{coder_username}/egregore/terminal?coder_session_token={token}"}
+    return {"url": f"{coder_url}/@{coder_username}/egregore/terminal"}
 
 
 # =============================================================================
