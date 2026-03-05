@@ -444,10 +444,10 @@ const apiTests = [
       body: JSON.stringify(testPayload),
     });
 
-    assert(resp.ok, `Promote API returned ${resp.status}: ${await resp.text()}`);
-    const data = (await resp.json()) as { status: string; artifact_id?: string };
-    assert(data.status === "promoted", `Expected status=promoted, got ${data.status}`);
-    console.log(`        (artifact_id: ${data.artifact_id})`);
+    const respBody = await resp.json() as { status: string; artifact_id?: string };
+    assert(resp.ok, `Promote API returned ${resp.status}: ${JSON.stringify(respBody)}`);
+    assert(respBody.status === "promoted", `Expected status=promoted, got ${respBody.status}`);
+    console.log(`        (artifact_id: ${respBody.artifact_id})`);
 
     // Verify the artifact exists in the graph
     const verifyResp = await fetch(`${apiUrl}/api/graph/query`, {
