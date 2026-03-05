@@ -179,6 +179,20 @@ class CoderClient:
                 return {"status": "error", "detail": resp.text[:200]}
 
 
+    async def create_user_token(self, username: str, lifetime_seconds: int = 600) -> str:
+        """Create a short-lived API token for a user. Returns the token string or empty."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/v2/users/{username}/keys",
+                headers=self._headers(),
+                json={"lifetime": lifetime_seconds * 1_000_000_000},  # nanoseconds
+            )
+            if resp.status_code in (200, 201):
+                return resp.json().get("key", "")
+            logger.warning(f"Token creation for {username} failed: {resp.status_code}")
+            return ""
+
+
 async def get_coder_client(coder_url: str, session_token: str) -> CoderClient:
     """Create a CoderClient for an org's Coder instance.
 
