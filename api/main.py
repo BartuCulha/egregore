@@ -31,6 +31,7 @@ from .models import (
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
     HostingProvision, HostingUser, UserKeysUpdate,
+    GoogleOAuthCallback, GooglePromote,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -4123,6 +4124,225 @@ async def user_keys_fetch(
     if not value:
         return {"status": "not_set", "value": None}
     return {"status": "ok", "value": value}
+
+
+# =============================================================================
+# GOOGLE CONNECTOR ENDPOINTS
+# =============================================================================
+
+
+@app.get("/api/connectors/google/auth-url")
+async def google_auth_url(org: dict = Depends(validate_api_key)):
+    """Get Google OAuth consent URL (for hosted deployments)."""
+    from .services.google import get_auth_url
+    try:
+        url = get_auth_url(state=org.get("slug", ""))
+        return {"url": url}
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/connectors/google/callback")
+async def google_callback(
+    body: GoogleOAuthCallback,
+    org: dict = Depends(validate_api_key),
+):
+    """Exchange Google OAuth code for tokens. Store encrypted in Supabase."""
+    from .services.google import exchange_code
+    from .services.keys import store_user_key
+
+    result = await exchange_code(body.code)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Store tokens encrypted
+    if result.get("access_token"):
+        store_user_key(body.github_username, "google_oauth_token", result["access_token"])
+    if result.get("refresh_token"):
+        store_user_key(body.github_username, "google_refresh_token", result["refresh_token"])
+
+    # Update user record with Google email
+    if USE_SUPABASE and result.get("email"):
+        try:
+            from .services.supabase import get_client
+            get_client().table("users").update({
+                "google_account_email": result["email"],
+                "google_oauth_token_set": True,
+            }).eq("github_username", body.github_username).execute()
+        except Exception:
+            pass  # Non-fatal
+
+    return {
+        "status": "ok",
+        "email": result.get("email", ""),
+    }
+
+
+@app.get("/api/connectors/google/status")
+async def google_status(
+    github_username: str = Query(...),
+    org: dict = Depends(validate_api_key),
+):
+    """Check if a user has valid Google tokens."""
+    if not USE_SUPABASE:
+        return {"connected": False, "reason": "supabase disabled"}
+
+    try:
+        from .services.supabase import get_client
+        result = get_client().table("users").select(
+            "google_oauth_token_set, google_account_email"
+        ).eq("github_username", github_username).limit(1).execute()
+
+        if not result.data:
+            return {"connected": False}
+
+        row = result.data[0]
+        return {
+            "connected": bool(row.get("google_oauth_token_set")),
+            "email": row.get("google_account_email", ""),
+        }
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
+
+@app.post("/api/connectors/google/revoke")
+async def google_revoke(
+    github_username: str = Query(...),
+    org: dict = Depends(validate_api_key),
+):
+    """Revoke Google tokens for a user."""
+    from .services.keys import get_user_key, delete_user_key
+    from .services.google import revoke_token
+
+    # Try to revoke the token with Google
+    token = get_user_key(github_username, "google_oauth_token")
+    if token:
+        await revoke_token(token)
+
+    # Delete stored tokens
+    delete_user_key(github_username, "google_oauth_token")
+    delete_user_key(github_username, "google_refresh_token")
+
+    # Clear Google status in user record
+    if USE_SUPABASE:
+        try:
+            from .services.supabase import get_client
+            get_client().table("users").update({
+                "google_oauth_token_set": False,
+                "google_account_email": None,
+            }).eq("github_username", github_username).execute()
+        except Exception:
+            pass
+
+    return {"status": "revoked"}
+
+
+@app.post("/api/connectors/google/promote")
+async def google_promote(
+    body: GooglePromote,
+    org: dict = Depends(validate_api_key),
+):
+    """Promote Google content to shared memory — create Artifact node + connections."""
+    import uuid
+
+    # Build Cypher queries for the graph
+    queries = []
+
+    # 1. Core Artifact node (MERGE on google_id for dedup)
+    queries.append({
+        "statement": """
+            MERGE (a:Artifact {google_id: $googleId})
+            ON CREATE SET
+                a.id = $id,
+                a.title = $title,
+                a.type = 'source',
+                a.origin = $origin,
+                a.created = date(),
+                a.filePath = $filePath,
+                a.summary = $summary,
+                a.topics = $topics
+            ON MATCH SET
+                a.summary = $summary,
+                a.topics = $topics,
+                a.updated = date()
+            RETURN a.id AS artifact_id
+        """,
+        "parameters": {
+            "googleId": body.google_id,
+            "id": str(uuid.uuid4()),
+            "title": body.title,
+            "origin": f"google-{body.service}",
+            "filePath": body.file_path,
+            "summary": body.summary,
+            "topics": body.topics,
+        },
+    })
+
+    # 2. Author link
+    queries.append({
+        "statement": """
+            MATCH (a:Artifact {google_id: $googleId}), (p:Person {github: $author})
+            MERGE (a)-[:CONTRIBUTED_BY]->(p)
+        """,
+        "parameters": {
+            "googleId": body.google_id,
+            "author": body.github_username,
+        },
+    })
+
+    # 3. Mentioned people
+    if body.mentioned_people:
+        queries.append({
+            "statement": """
+                MATCH (a:Artifact {google_id: $googleId})
+                UNWIND $mentions AS personName
+                MATCH (p:Person {name: personName})
+                MERGE (a)-[:MENTIONS]->(p)
+            """,
+            "parameters": {
+                "googleId": body.google_id,
+                "mentions": body.mentioned_people,
+            },
+        })
+
+    # 4. Quest connections
+    if body.related_quests:
+        queries.append({
+            "statement": """
+                MATCH (a:Artifact {google_id: $googleId})
+                UNWIND $quests AS questName
+                MATCH (q:Quest {name: questName})
+                MERGE (a)-[:RELATES_TO]->(q)
+            """,
+            "parameters": {
+                "googleId": body.google_id,
+                "quests": body.related_quests,
+            },
+        })
+
+    # Execute all queries
+    results = []
+    for q in queries:
+        try:
+            result = await execute_query(org, q["statement"], q["parameters"])
+            results.append(result)
+        except Exception as e:
+            logger.warning(f"Graph query failed during promotion: {e}")
+            results.append({"error": str(e)})
+
+    # Extract artifact ID from the first query result
+    artifact_id = None
+    if results and isinstance(results[0], dict):
+        values = results[0].get("values", [])
+        if values:
+            artifact_id = values[0][0] if isinstance(values[0], list) else values[0]
+
+    return {
+        "status": "promoted",
+        "artifact_id": artifact_id,
+        "graph_queries": len(queries),
+        "graph_results": len(results),
+    }
 
 
 # =============================================================================

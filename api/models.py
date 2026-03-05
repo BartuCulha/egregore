@@ -191,3 +191,26 @@ class HostingUser(BaseModel):
 class UserKeysUpdate(BaseModel):
     """Update user API keys."""
     anthropic_api_key: Optional[str] = None
+
+
+# --- Google Connector models ---
+
+
+class GoogleOAuthCallback(BaseModel):
+    """Exchange Google OAuth code for tokens."""
+    code: str
+    github_username: str
+
+
+class GooglePromote(BaseModel):
+    """Promote Google content to shared memory (graph + memory file)."""
+    github_username: str
+    google_id: str
+    title: str
+    service: str  # drive, gmail, calendar, docs, sheets
+    content: str
+    file_path: str
+    summary: str
+    topics: list[str] = []
+    mentioned_people: list[str] = []
+    related_quests: list[str] = []

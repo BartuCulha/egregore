@@ -5,5 +5,12 @@
   "api_url": "https://egregore-production-55f2.up.railway.app",
   "repo_name": "egregore",
   "slug": "curvelabs",
-  "repos": []
+  "repos": [],
+  "connectors": {
+    "google": {
+      "enabled": true,
+      "services": ["drive", "gmail", "calendar", "docs", "sheets"],
+      "scopes": {}
+    }
+  }
 }
