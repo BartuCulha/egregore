@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url TEXT,
     telegram_username TEXT,
     telegram_id BIGINT,
+    -- Google Connector fields
+    google_oauth_token_enc TEXT,
+    google_oauth_token_set BOOLEAN DEFAULT FALSE,
+    google_refresh_token_enc TEXT,
+    google_refresh_token_set BOOLEAN DEFAULT FALSE,
+    google_account_email TEXT,
+    -- Key management
+    keys_updated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
