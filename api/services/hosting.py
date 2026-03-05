@@ -64,6 +64,7 @@ def _cloud_init_script(
     managed_repos: str = "",
     github_oauth_client_id: str = "",
     github_oauth_client_secret: str = "",
+    github_token: str = "",
 ) -> str:
     """Generate cloud-init script that installs Coder + Egregore template on a fresh VPS."""
     return f"""#!/bin/bash
@@ -80,7 +81,7 @@ echo "root:{coder_password}" | chpasswd
 
 # ─── System setup ────────────────────────────────────────────────
 apt-get update
-apt-get install -y docker.io curl jq
+apt-get install -y docker.io curl jq git
 
 systemctl enable docker
 systemctl start docker
@@ -114,9 +115,6 @@ CODER_OAUTH2_GITHUB_CLIENT_ID={github_oauth_client_id}
 CODER_OAUTH2_GITHUB_CLIENT_SECRET={github_oauth_client_secret}
 CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS=true
 CODER_OAUTH2_GITHUB_ALLOWED_ORGS={github_org}
-CODER_EXTERNAL_AUTH_0_TYPE=github
-CODER_EXTERNAL_AUTH_0_CLIENT_ID={github_oauth_client_id}
-CODER_EXTERNAL_AUTH_0_CLIENT_SECRET={github_oauth_client_secret}
 OAUTHENV
 fi
 
@@ -141,8 +139,9 @@ coder login --first-user-email admin@egregore.xyz \
   --first-user-trial=false \
   "$CODER_URL" || true
 
-# Store org config for template variables
+# ─── Org config + git credentials ────────────────────────────────
 mkdir -p /opt/egregore
+
 cat > /opt/egregore/org-config.json <<ORGCFG
 {{
   "org_slug": "{org_slug}",
@@ -156,6 +155,31 @@ cat > /opt/egregore/org-config.json <<ORGCFG
   "egregore_api_key": "{egregore_api_key}"
 }}
 ORGCFG
+
+# Store GitHub token for git operations (used by workspace startup)
+if [ -n "{github_token}" ]; then
+  echo "{github_token}" > /opt/egregore/github-token
+  chmod 600 /opt/egregore/github-token
+  echo "GitHub token stored"
+
+  # Pre-clone repos so workspace startup is instant (copy, not clone)
+  mkdir -p /opt/egregore/repos
+  echo "Pre-cloning repos..."
+  git clone "https://x-access-token:{github_token}@github.com/{github_org}/{repo_name}.git" \
+    /opt/egregore/repos/egregore 2>&1 || echo "Egregore clone failed (may not exist yet)"
+  git clone "https://x-access-token:{github_token}@github.com/{github_org}/{org_slug}-memory.git" \
+    /opt/egregore/repos/memory 2>&1 || echo "Memory clone failed (may not exist yet)"
+
+  # Strip embedded credentials from cloned repo configs
+  for repo_dir in /opt/egregore/repos/*/; do
+    if [ -d "$repo_dir/.git" ]; then
+      cd "$repo_dir"
+      git remote set-url origin "$(git remote get-url origin | sed 's|x-access-token:[^@]*@||')"
+      cd /
+    fi
+  done
+  echo "Repos pre-cloned"
+fi
 
 echo "=== Egregore cloud-init completed at $(date) ==="
 """
@@ -174,6 +198,7 @@ async def provision_vps(
     server_type: str = DEFAULT_SERVER_TYPE,
     github_oauth_client_id: str = "",
     github_oauth_client_secret: str = "",
+    github_token: str = "",
 ) -> dict:
     """Provision a Hetzner VPS with Coder installed for an org."""
     if not HETZNER_TOKEN:
@@ -194,6 +219,7 @@ async def provision_vps(
         managed_repos=managed_repos,
         github_oauth_client_id=github_oauth_client_id,
         github_oauth_client_secret=github_oauth_client_secret,
+        github_token=github_token,
     )
 
     server_name = f"egregore-{org_slug}"

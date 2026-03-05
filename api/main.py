@@ -705,6 +705,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 egregore_api_key=api_key,
                 managed_repos=managed_repos,
                 server_type=body.server_type,
+                github_token=token,
             )
 
             if vps_result.get("error"):
@@ -3703,9 +3704,17 @@ async def admin_delete_org(slug: str, admin_user: str = Depends(validate_admin_g
 
 
 @app.post("/api/hosting/provision")
-async def hosting_provision(body: HostingProvision, admin_user: str = Depends(validate_admin_github_token)):
+async def hosting_provision(
+    body: HostingProvision,
+    admin_user: str = Depends(validate_admin_github_token),
+    authorization: str = Header(...),
+):
     """Provision a Hetzner VPS with Coder for an org. Admin only."""
     from .services.hosting import provision_vps
+
+    # Extract raw GitHub token for VPS git operations
+    raw_token = authorization.replace("Bearer ", "").strip()
+    github_token = raw_token if not raw_token.startswith("ek_") else ""
 
     # Get org's API key for the workspace
     org_config = ORG_CONFIGS.get(body.org_slug)
@@ -3732,6 +3741,7 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
         server_type=body.server_type,
         github_oauth_client_id=body.github_oauth_client_id,
         github_oauth_client_secret=body.github_oauth_client_secret,
+        github_token=github_token,
     )
 
     if result.get("error"):
@@ -3759,7 +3769,11 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
 
 
 @app.post("/api/hosting/enable/{slug}")
-async def hosting_enable(slug: str, github_username: str = Depends(validate_github_token)):
+async def hosting_enable(
+    slug: str,
+    github_username: str = Depends(validate_github_token),
+    authorization: str = Header(...),
+):
     """Enable hosted Coder for an existing org. Org admin only.
 
     Derives fork_url, memory_url from existing Supabase org data.
@@ -3767,6 +3781,10 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
     """
     from .services.hosting import provision_vps
     from .services import supabase as sb
+
+    # Extract raw GitHub token for VPS git operations
+    raw_token = authorization.replace("Bearer ", "").strip()
+    github_token = raw_token if not raw_token.startswith("ek_") else ""
 
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
@@ -3818,6 +3836,7 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
         memory_url=f"https://github.com/{github_org}/{github_org}-memory.git",
         api_url=api_url,
         egregore_api_key=egregore_api_key,
+        github_token=github_token,
     )
 
     if result.get("error"):
