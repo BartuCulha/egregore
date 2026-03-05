@@ -16,7 +16,14 @@ set -euo pipefail
 #   transcripts:            { doc_id: [{ text, start_timestamp, end_timestamp, source, ... }] }
 
 CACHE_DIR="$HOME/Library/Application Support/Granola"
-CACHE_FILE="$CACHE_DIR/cache-v3.json"
+# Support cache-v3 and cache-v4 (Granola upgrades the version over time)
+if [ -f "$CACHE_DIR/cache-v4.json" ]; then
+  CACHE_FILE="$CACHE_DIR/cache-v4.json"
+elif [ -f "$CACHE_DIR/cache-v3.json" ]; then
+  CACHE_FILE="$CACHE_DIR/cache-v3.json"
+else
+  CACHE_FILE="$CACHE_DIR/cache-v4.json"  # will fail with clear message in check_cache
+fi
 
 # --- Helpers ---
 
