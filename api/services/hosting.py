@@ -159,7 +159,7 @@ ORGCFG
 # Store GitHub token for git operations (used by workspace startup)
 if [ -n "{github_token}" ]; then
   echo "{github_token}" > /opt/egregore/github-token
-  chmod 600 /opt/egregore/github-token
+  chmod 644 /opt/egregore/github-token
   echo "GitHub token stored"
 
   # Pre-clone repos so workspace startup is instant (copy, not clone)
