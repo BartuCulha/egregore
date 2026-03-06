@@ -2010,8 +2010,8 @@ async def remove_member(
         if org_config and mode == "full":
             try:
                 result = await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name}) RETURN p.name AS name
-                """, {"name": username})
+                    MATCH (p:Person) WHERE p.github = $username OR p.name = $username RETURN p.name AS name
+                """, {"username": username})
                 has_node = bool(result.get("values") and result["values"][0][0])
             except Exception:
                 has_node = False
@@ -2081,38 +2081,44 @@ async def remove_member(
         if org_config:
             try:
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[:BY]->(s:Session)
+                    MATCH (p:Person)-[:BY]->(s:Session)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE s
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted sessions")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:CONTRIBUTED_BY]-()
+                    MATCH (p:Person)-[r:CONTRIBUTED_BY]-()
+                    WHERE p.github = $username OR p.name = $username
                     DELETE r
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: removed contribution relationships")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:STARTED_BY]-()
+                    MATCH (p:Person)-[r:STARTED_BY]-()
+                    WHERE p.github = $username OR p.name = $username
                     DELETE r
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: removed quest ownership")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[:BY]->(t:Todo)
+                    MATCH (p:Person)-[:BY]->(t:Todo)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE t
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted todos")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:ASKED_BY]->(q)
+                    MATCH (p:Person)-[r:ASKED_BY]->(q)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE q
-                """, {"name": username})
+                """, {"username": username})
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})
+                    MATCH (p:Person)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE p
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted Person node")
             except Exception as e:
                 errors.append(f"Neo4j cleanup failed: {str(e)}")
@@ -2121,9 +2127,10 @@ async def remove_member(
         if org_config:
             try:
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})
+                    MATCH (p:Person)
+                    WHERE p.github = $username OR p.name = $username
                     SET p.status = 'removed', p.removedAt = datetime()
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: Person node marked as removed")
             except Exception as e:
                 errors.append(f"Neo4j status update failed: {str(e)}")
