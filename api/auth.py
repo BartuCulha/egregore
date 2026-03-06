@@ -146,6 +146,18 @@ async def load_orgs_from_supabase():
             logger.info(f"Loaded org from Supabase: {slug}")
 
         logger.info(f"Supabase org reload complete: {len(supabase_configs)} orgs")
+
+        # Backfill: if env vars have telegram_chat_id but Supabase doesn't, write it
+        from .services.supabase import update_org
+        for slug, cfg in ORG_CONFIGS.items():
+            env_chat_id = cfg.get("telegram_chat_id")
+            sb_chat_id = supabase_configs.get(slug, {}).get("telegram_chat_id")
+            if env_chat_id and not sb_chat_id:
+                try:
+                    update_org(slug, telegram_chat_id=env_chat_id)
+                    logger.info(f"Backfilled telegram_chat_id for {slug}")
+                except Exception as e:
+                    logger.warning(f"Failed to backfill telegram for {slug}: {e}")
     except Exception as e:
         logger.warning(f"Failed to load orgs from Supabase: {e}")
 

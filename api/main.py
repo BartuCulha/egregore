@@ -2860,13 +2860,18 @@ async def admin_patch_org(
 
     allowed = {"created_at", "name", "transcript_sharing",
                 "hosting_enabled", "hosting_ip", "hosting_coder_url",
-                "hosting_coder_token", "hosting_server_id"}
+                "hosting_coder_token", "hosting_server_id",
+                "telegram_chat_id", "telegram_group_title", "telegram_group_username"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
 
     try:
         sb.get_client().table("orgs").update(updates).eq("slug", slug).execute()
+        # Sync telegram fields to in-memory config (avoids restart)
+        for field in ("telegram_chat_id", "telegram_group_title", "telegram_group_username"):
+            if field in updates and slug in ORG_CONFIGS:
+                ORG_CONFIGS[slug][field] = updates[field]
         return {"patched": list(updates.keys()), "slug": slug}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
