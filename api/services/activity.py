@@ -70,7 +70,7 @@ async def _my_sessions(org: dict, me: str) -> dict:
                    ELSE null END
                ) AS topic, s.id AS id,
                s.filePath AS filePath, target.name AS handedTo
-        ORDER BY s.date DESC, s.id DESC LIMIT 10
+        ORDER BY date(left(toString(s.date), 10)) DESC, s.id DESC LIMIT 10
     """, {"me": me})
 
 
@@ -86,7 +86,7 @@ async def _team_sessions(org: dict, me: str) -> dict:
                    THEN replace(last(split(s.branch, '/')), '-', ' ')
                    ELSE null END
                ) AS topic, p.name AS by
-        ORDER BY s.date DESC LIMIT 5
+        ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
     """, {"me": me})
 
 
@@ -185,7 +185,7 @@ async def _all_handoffs(org: dict, me: str) -> dict:
         MATCH (s)-[:BY]->(author:Person)
         RETURN s.topic AS topic, s.date AS date, author.name AS from,
                target.name AS to, s.filePath AS filePath
-        ORDER BY s.date DESC LIMIT 5
+        ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
     """, {"me": me})
 
 
@@ -250,7 +250,7 @@ async def _focus_history(org: dict, me: str) -> dict:
         WHERE s.focusSelected IS NOT NULL
         RETURN s.focusShown AS shown, s.focusSelected AS selected,
                s.focusDismissed AS dismissed, s.date AS date, s.topic AS topic
-        ORDER BY s.date DESC LIMIT 5
+        ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
     """, {"me": me})
 
 

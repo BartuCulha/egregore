@@ -667,7 +667,7 @@ QUERIES = {
             MATCH (s:Session)-[:BY]->(p:Person)
             WHERE date(s.date) >= date() - duration('P7D')
             RETURN s.date AS date, s.topic AS topic, p.name AS person, s.summary AS summary
-            ORDER BY s.date DESC LIMIT 10
+            ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 10
         """
     },
     "person_projects": {
@@ -684,7 +684,7 @@ QUERIES = {
         "cypher": """
             MATCH (s:Session)-[:BY]->(p:Person {name: $name})
             RETURN s.date AS date, s.topic AS topic, s.summary AS summary
-            ORDER BY s.date DESC LIMIT 5
+            ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
         """
     },
     "quest_details": {
@@ -829,7 +829,7 @@ QUERIES = {
             MATCH (s:Session)-[:BY]->(p:Person {name: $name})
             WHERE date(s.date) = date($date)
             RETURN s.date AS date, s.topic AS topic, s.summary AS summary
-            ORDER BY s.date DESC
+            ORDER BY date(left(toString(s.date), 10)) DESC
         """
     },
     "handoffs_to_person": {
