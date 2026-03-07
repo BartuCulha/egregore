@@ -408,8 +408,9 @@ What should we call you? (short name, like 'jane')
 
 Register in Neo4j using neo4j_query tool:
 ```cypher
-MERGE (p:Person {name: $shortName})
-ON CREATE SET p.fullName = $fullName, p.joined = date()
+MERGE (p:Person {github: $github})
+ON CREATE SET p.name = $shortName, p.fullName = $fullName, p.joined = date()
+ON MATCH SET p.name = $shortName, p.fullName = $fullName
 RETURN p.name, p.joined
 ```
 
