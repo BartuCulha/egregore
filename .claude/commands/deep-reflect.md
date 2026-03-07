@@ -92,6 +92,14 @@ RETURN head(dates) AS earliest, last(dates) AS latest, size(dates) AS count
 ```
 params: `{"query": "<the user's query>"}`
 
+**Q6 — Graph health (two queries via graph-batch, run alongside Q1-Q5):**
+```json
+[
+  {"statement": "MATCH (a:Artifact) RETURN count(a) AS total, sum(CASE WHEN a.topics IS NULL OR size(a.topics) = 0 THEN 1 ELSE 0 END) AS no_topics, sum(CASE WHEN a.filePath IS NULL THEN 1 ELSE 0 END) AS ghosts"},
+  {"statement": "MATCH (iso:Artifact) WHERE NOT (iso)-[:PART_OF]->(:Quest) AND NOT (iso)-[:RELATES_TO]-(:Artifact) RETURN count(iso) AS isolated"}
+]
+```
+
 ### 1c. Assemble orientation brief
 
 Combine results into a structured text block for the research agent. Include:
@@ -100,7 +108,10 @@ Combine results into a structured text block for the research agent. Include:
 - Entry point artifacts (id, title, type, topics, filePath, author)
 - Neighborhood map (quests, related artifacts, contributors per entry point)
 - Temporal spread (earliest, latest, count)
+- Graph health: `{total} artifacts, {pct}% have topics, {pct}% connected to other artifacts/quests, {ghosts} ghost artifacts`
 - The user's query
+
+**Graph health computation:** From Q6 results, compute: `topic_pct = round((total - no_topics) / total * 100)`, `connected_pct = round((total - isolated) / total * 100)`. Density label: connected >= 70% → "dense", >= 40% → "moderate", < 40% → "sparse".
 
 Show brief progress to user: `Orienting... {N} entry points found across {date range}.`
 
@@ -131,6 +142,10 @@ You are a research agent for an organization's knowledge graph. Your job: autono
 ## Orientation (pre-gathered)
 
 {orientation_brief}
+
+## Graph health
+
+This graph contains {total} artifacts. {topic_pct}% have topic tags, {connected_pct}% are connected to at least one other artifact or quest. {ghosts} artifacts have no file on disk. Calibrate accordingly — this is a {density_label} graph.
 
 ## How to research
 
