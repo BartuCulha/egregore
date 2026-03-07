@@ -1736,7 +1736,8 @@ async def org_invite_info(token: str):
 async def org_invite_accept(invite_token: str, authorization: str = Header(...)):
     """Accept an invite. Verifies invitee identity, registers them, returns setup token.
 
-    The invitee only needs read:user scope — repo access is deferred to CLI device flow.
+    The invitee's GitHub token (repo,read:org scope) is passed through to the setup token
+    so the CLI can clone repos without a separate device flow auth.
     """
     token = authorization.replace("Bearer ", "").strip()
 
@@ -1813,10 +1814,11 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     # Get API key from server config (not from egregore.json — secrets don't go in git)
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
-    # Generate setup token WITHOUT github_token — CLI will run device flow for repo-scoped auth
+    # Pass the user's GitHub token from website OAuth (has repo,read:org scope)
     setup_token = create_token({
         "fork_url": fork_url,
         "memory_url": memory_url,
+        "github_token": token,
         "api_key": api_key,
         "api_url": api_url,
         "org_name": org_name,
@@ -1826,7 +1828,6 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         "slug": slug,
         "repos": repos,
         "repo_name": invite_repo_name,
-        "needs_cli_auth": True,
     })
 
     # Generate Telegram group invite link for the new member
