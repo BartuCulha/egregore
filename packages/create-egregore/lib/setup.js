@@ -165,7 +165,11 @@ async function install(data, ui, targetDir) {
     state.github_username = github_username;
     state.github_name = github_name || github_username;
   }
-  state.onboarding_complete = true;
+  state.onboarding_complete = false;
+  state.usage_type = "joiner_group";
+  state.org_setup = true;
+  state.github_configured = true;
+  state.workspace_ready = true;
   if (transcript_sharing !== undefined) {
     state.transcript_sharing = transcript_sharing;
   }

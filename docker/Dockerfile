@@ -34,9 +34,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Claude Code CLI (official install method)
-RUN curl -fsSL https://claude.ai/install.sh | sh
-
 # Create non-root user for workspaces
 RUN useradd -m -s /bin/zsh -G sudo egregore \
     && echo "egregore ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/egregore
@@ -54,7 +51,10 @@ RUN chmod +x /opt/egregore/bin/*.sh
 USER egregore
 WORKDIR /home/egregore
 
+# Claude Code CLI (install as egregore user so it goes to ~/.local/bin)
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
 # Set up zsh with minimal config
-RUN echo 'export PATH="/opt/egregore/bin:$PATH"' >> ~/.zshrc
+RUN echo 'export PATH="/home/egregore/.local/bin:/opt/egregore/bin:$PATH"' >> ~/.zshrc
 
 CMD ["zsh"]
