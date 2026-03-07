@@ -151,7 +151,8 @@ def backfill_artifacts(driver):
             if author:
                 session.run("""
                     MATCH (a:Artifact {id: $artifact_id})
-                    MERGE (p:Person {name: $author})
+                    MERGE (p:Person {github: $author})
+                    ON CREATE SET p.name = $author
                     MERGE (a)-[:CONTRIBUTED_BY]->(p)
                 """, {"artifact_id": artifact_id, "author": author.lower()})
 
@@ -258,7 +259,8 @@ def backfill_sessions(driver):
             if author:
                 session.run("""
                     MATCH (s:Session {id: $session_id})
-                    MERGE (p:Person {name: $author})
+                    MERGE (p:Person {github: $author})
+                    ON CREATE SET p.name = $author
                     MERGE (s)-[:BY]->(p)
                 """, {"session_id": session_id, "author": author.lower()})
 
@@ -329,7 +331,8 @@ def backfill_quests(driver):
             if started_by:
                 session.run("""
                     MATCH (q:Quest {id: $quest_id})
-                    MERGE (p:Person {name: $author})
+                    MERGE (p:Person {github: $author})
+                    ON CREATE SET p.name = $author
                     MERGE (q)-[:STARTED_BY]->(p)
                 """, {"quest_id": quest_id, "author": started_by.lower()})
 
