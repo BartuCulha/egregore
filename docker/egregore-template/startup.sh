@@ -22,7 +22,8 @@ fi
 
 if [ ! -d "$EGREGORE_DIR/.git" ]; then
   echo "Cloning Egregore repo..."
-  git clone "${FORK_URL:-https://github.com/${GITHUB_ORG}/${REPO_NAME:-egregore-core}.git}" "$EGREGORE_DIR"
+  git clone --branch develop "${FORK_URL:-https://github.com/${GITHUB_ORG}/${REPO_NAME:-egregore-core}.git}" "$EGREGORE_DIR" 2>/dev/null \
+    || git clone "${FORK_URL:-https://github.com/${GITHUB_ORG}/${REPO_NAME:-egregore-core}.git}" "$EGREGORE_DIR"
 else
   echo "Updating Egregore repo..."
   cd "$EGREGORE_DIR"
@@ -79,7 +80,7 @@ cat > "$EGREGORE_DIR/egregore.json" <<EOF
 {
   "org_name": "${ORG_NAME:-Egregore}",
   "github_org": "${GITHUB_ORG}",
-  "memory_repo": "${MEMORY_URL}",
+  "memory_repo": "${MEMORY_URL:-}",
   "api_url": "${API_URL:-https://egregore-production-55f2.up.railway.app}",
   "repo_name": "${REPO_NAME:-egregore-core}",
   "slug": "${ORG_SLUG}",
