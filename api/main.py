@@ -705,6 +705,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 egregore_api_key=api_key,
                 managed_repos=managed_repos,
                 server_type=body.server_type,
+                github_token=token,
             )
 
             if vps_result.get("error"):
@@ -2009,8 +2010,8 @@ async def remove_member(
         if org_config and mode == "full":
             try:
                 result = await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name}) RETURN p.name AS name
-                """, {"name": username})
+                    MATCH (p:Person) WHERE p.github = $username OR p.name = $username RETURN p.name AS name
+                """, {"username": username})
                 has_node = bool(result.get("values") and result["values"][0][0])
             except Exception:
                 has_node = False
@@ -2080,38 +2081,44 @@ async def remove_member(
         if org_config:
             try:
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[:BY]->(s:Session)
+                    MATCH (p:Person)-[:BY]->(s:Session)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE s
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted sessions")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:CONTRIBUTED_BY]-()
+                    MATCH (p:Person)-[r:CONTRIBUTED_BY]-()
+                    WHERE p.github = $username OR p.name = $username
                     DELETE r
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: removed contribution relationships")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:STARTED_BY]-()
+                    MATCH (p:Person)-[r:STARTED_BY]-()
+                    WHERE p.github = $username OR p.name = $username
                     DELETE r
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: removed quest ownership")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[:BY]->(t:Todo)
+                    MATCH (p:Person)-[:BY]->(t:Todo)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE t
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted todos")
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})-[r:ASKED_BY]->(q)
+                    MATCH (p:Person)-[r:ASKED_BY]->(q)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE q
-                """, {"name": username})
+                """, {"username": username})
 
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})
+                    MATCH (p:Person)
+                    WHERE p.github = $username OR p.name = $username
                     DETACH DELETE p
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: deleted Person node")
             except Exception as e:
                 errors.append(f"Neo4j cleanup failed: {str(e)}")
@@ -2120,9 +2127,10 @@ async def remove_member(
         if org_config:
             try:
                 await execute_system_query(org_config, """
-                    MATCH (p:Person {name: $name})
+                    MATCH (p:Person)
+                    WHERE p.github = $username OR p.name = $username
                     SET p.status = 'removed', p.removedAt = datetime()
-                """, {"name": username})
+                """, {"username": username})
                 actions.append("Neo4j: Person node marked as removed")
             except Exception as e:
                 errors.append(f"Neo4j status update failed: {str(e)}")
@@ -2859,13 +2867,18 @@ async def admin_patch_org(
 
     allowed = {"created_at", "name", "transcript_sharing",
                 "hosting_enabled", "hosting_ip", "hosting_coder_url",
-                "hosting_coder_token", "hosting_server_id"}
+                "hosting_coder_token", "hosting_server_id",
+                "telegram_chat_id", "telegram_group_title", "telegram_group_username"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
 
     try:
         sb.get_client().table("orgs").update(updates).eq("slug", slug).execute()
+        # Sync telegram fields to in-memory config (avoids restart)
+        for field in ("telegram_chat_id", "telegram_group_title", "telegram_group_username"):
+            if field in updates and slug in ORG_CONFIGS:
+                ORG_CONFIGS[slug][field] = updates[field]
         return {"patched": list(updates.keys()), "slug": slug}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Patch failed: {e}")
@@ -3703,9 +3716,17 @@ async def admin_delete_org(slug: str, admin_user: str = Depends(validate_admin_g
 
 
 @app.post("/api/hosting/provision")
-async def hosting_provision(body: HostingProvision, admin_user: str = Depends(validate_admin_github_token)):
+async def hosting_provision(
+    body: HostingProvision,
+    admin_user: str = Depends(validate_admin_github_token),
+    authorization: str = Header(...),
+):
     """Provision a Hetzner VPS with Coder for an org. Admin only."""
     from .services.hosting import provision_vps
+
+    # Extract raw GitHub token for VPS git operations
+    raw_token = authorization.replace("Bearer ", "").strip()
+    github_token = raw_token if not raw_token.startswith("ek_") else ""
 
     # Get org's API key for the workspace
     org_config = ORG_CONFIGS.get(body.org_slug)
@@ -3732,6 +3753,7 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
         server_type=body.server_type,
         github_oauth_client_id=body.github_oauth_client_id,
         github_oauth_client_secret=body.github_oauth_client_secret,
+        github_token=github_token,
     )
 
     if result.get("error"):
@@ -3759,7 +3781,11 @@ async def hosting_provision(body: HostingProvision, admin_user: str = Depends(va
 
 
 @app.post("/api/hosting/enable/{slug}")
-async def hosting_enable(slug: str, github_username: str = Depends(validate_github_token)):
+async def hosting_enable(
+    slug: str,
+    github_username: str = Depends(validate_github_token),
+    authorization: str = Header(...),
+):
     """Enable hosted Coder for an existing org. Org admin only.
 
     Derives fork_url, memory_url from existing Supabase org data.
@@ -3767,6 +3793,10 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
     """
     from .services.hosting import provision_vps
     from .services import supabase as sb
+
+    # Extract raw GitHub token for VPS git operations
+    raw_token = authorization.replace("Bearer ", "").strip()
+    github_token = raw_token if not raw_token.startswith("ek_") else ""
 
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
@@ -3818,6 +3848,7 @@ async def hosting_enable(slug: str, github_username: str = Depends(validate_gith
         memory_url=f"https://github.com/{github_org}/{github_org}-memory.git",
         api_url=api_url,
         egregore_api_key=egregore_api_key,
+        github_token=github_token,
     )
 
     if result.get("error"):
