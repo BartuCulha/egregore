@@ -10,7 +10,13 @@ terraform {
 }
 
 provider "coder" {}
-provider "docker" {}
+provider "docker" {
+  registry_auth {
+    address  = "ghcr.io"
+    username = "oauth2"
+    password = var.ghcr_token
+  }
+}
 
 # ─── Template parameters (set per org by admin) ──────────────────
 
@@ -83,10 +89,16 @@ variable "fork_url" {
   type = string
 }
 
+variable "ghcr_token" {
+  type      = string
+  sensitive = true
+}
+
 # ─── Docker image ────────────────────────────────────────────────
 
 resource "docker_image" "egregore" {
-  name = "ghcr.io/curve-labs/egregore-workspace:latest"
+  name         = "ghcr.io/curve-labs/egregore-workspace:latest"
+  keep_locally = true
 }
 
 # ─── Container ───────────────────────────────────────────────────
@@ -126,8 +138,8 @@ resource "docker_container" "workspace" {
 
   user = "egregore"
 
-  # Keep container alive — Coder agent handles startup
-  command = ["sh", "-c", "exec sleep infinity"]
+  # Run Coder agent init script (downloads + starts the agent)
+  command = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
 }
 
 # ─── Coder agent ─────────────────────────────────────────────────
