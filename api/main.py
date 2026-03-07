@@ -3988,6 +3988,44 @@ async def hosting_create_user(slug: str, body: HostingUser, org: dict = Depends(
     return result
 
 
+@app.put("/api/hosting/user/{slug}/{username}/roles")
+async def hosting_update_user_roles(
+    slug: str, username: str, body: dict, org: dict = Depends(validate_api_key)
+):
+    """Update a Coder user's roles. Requires org API key."""
+    from .services.coder import CoderClient
+
+    coder_url, coder_token = "", ""
+    if USE_SUPABASE:
+        try:
+            from .services import supabase as sb
+            rows = sb.get_client().table("orgs").select(
+                "hosting_coder_url, hosting_coder_token"
+            ).eq("slug", slug).execute()
+            if rows.data:
+                coder_url = rows.data[0].get("hosting_coder_url", "")
+                coder_token = rows.data[0].get("hosting_coder_token", "")
+        except Exception as e:
+            logger.warning(f"Failed to look up Coder info: {e}")
+
+    if not coder_url or not coder_token:
+        raise HTTPException(status_code=404, detail="No hosted Coder instance found")
+
+    roles = body.get("roles", [])
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.put(
+            f"{coder_url}/api/v2/users/{username}/roles",
+            headers={
+                "Coder-Session-Token": coder_token,
+                "Content-Type": "application/json",
+            },
+            json={"roles": roles},
+        )
+        if resp.status_code == 200:
+            return {"status": "updated", "roles": roles}
+        raise HTTPException(status_code=resp.status_code, detail=resp.text[:200])
+
+
 @app.get("/api/hosting/info/{slug}")
 async def hosting_info(slug: str, authorization: str = Header(...)):
     """Get hosting info for an org. Any authenticated user can check if hosting is available.
