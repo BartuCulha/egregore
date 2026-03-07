@@ -3992,32 +3992,43 @@ async def hosting_create_user(slug: str, body: HostingUser, org: dict = Depends(
 async def hosting_update_user_roles(
     slug: str, username: str, body: dict, org: dict = Depends(validate_api_key)
 ):
-    """Update a Coder user's roles. Requires org API key."""
-    from .services.coder import CoderClient
+    """Update a Coder user's roles. Requires org API key.
+    Uses admin login (not stored token) since role changes need admin privileges."""
+    import httpx
 
-    coder_url, coder_token = "", ""
+    coder_url, coder_password = "", ""
     if USE_SUPABASE:
         try:
             from .services import supabase as sb
             rows = sb.get_client().table("orgs").select(
-                "hosting_coder_url, hosting_coder_token"
+                "hosting_coder_url, hosting_coder_password, hosting_ip"
             ).eq("slug", slug).execute()
             if rows.data:
                 coder_url = rows.data[0].get("hosting_coder_url", "")
-                coder_token = rows.data[0].get("hosting_coder_token", "")
+                coder_password = rows.data[0].get("hosting_coder_password", "")
+                if not coder_url and rows.data[0].get("hosting_ip"):
+                    coder_url = f"http://{rows.data[0]['hosting_ip']}"
         except Exception as e:
             logger.warning(f"Failed to look up Coder info: {e}")
 
-    if not coder_url or not coder_token:
-        raise HTTPException(status_code=404, detail="No hosted Coder instance found")
+    if not coder_url or not coder_password:
+        raise HTTPException(status_code=404, detail="No hosted Coder instance found or missing admin password")
 
-    import httpx
+    # Login as admin to get a privileged session token
+    from .services.hosting import get_coder_session_token
+    admin_token = await get_coder_session_token(
+        coder_url.replace("http://", "").replace("https://", ""),
+        coder_password
+    )
+    if not admin_token:
+        raise HTTPException(status_code=502, detail="Failed to authenticate as Coder admin")
+
     roles = body.get("roles", [])
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.put(
             f"{coder_url}/api/v2/users/{username}/roles",
             headers={
-                "Coder-Session-Token": coder_token,
+                "Coder-Session-Token": admin_token,
                 "Content-Type": "application/json",
             },
             json={"roles": roles},
