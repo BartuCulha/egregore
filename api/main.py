@@ -4011,6 +4011,7 @@ async def hosting_update_user_roles(
     if not coder_url or not coder_token:
         raise HTTPException(status_code=404, detail="No hosted Coder instance found")
 
+    import httpx
     roles = body.get("roles", [])
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.put(
