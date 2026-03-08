@@ -62,8 +62,6 @@ def _cloud_init_script(
     github_org: str,
     repo_name: str,
     managed_repos: str = "",
-    github_oauth_client_id: str = "",
-    github_oauth_client_secret: str = "",
     github_token: str = "",
 ) -> str:
     """Generate cloud-init script that installs Coder + Egregore template on a fresh VPS."""
@@ -108,15 +106,13 @@ CODER_FIRST_USER_TRIAL=false
 CODER_TELEMETRY_ENABLE=false
 CODERENV
 
-# GitHub OAuth (if configured — enables "Login with GitHub" on Coder)
-if [ -n "{github_oauth_client_id}" ] && [ "{github_oauth_client_id}" != "" ]; then
-  cat >> /etc/coder.d/coder.env <<OAUTHENV
-CODER_OAUTH2_GITHUB_CLIENT_ID={github_oauth_client_id}
-CODER_OAUTH2_GITHUB_CLIENT_SECRET={github_oauth_client_secret}
+# GitHub OAuth — always enabled, uses dedicated Coder OAuth app
+cat >> /etc/coder.d/coder.env <<OAUTHENV
+CODER_OAUTH2_GITHUB_CLIENT_ID={os.environ.get("CODER_GITHUB_CLIENT_ID", "")}
+CODER_OAUTH2_GITHUB_CLIENT_SECRET={os.environ.get("CODER_GITHUB_CLIENT_SECRET", "")}
 CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS=true
 CODER_OAUTH2_GITHUB_ALLOWED_ORGS={github_org}
 OAUTHENV
-fi
 
 # ─── Start Coder ─────────────────────────────────────────────────
 systemctl enable coder
@@ -196,8 +192,6 @@ async def provision_vps(
     egregore_api_key: str = "",
     managed_repos: str = "",
     server_type: str = DEFAULT_SERVER_TYPE,
-    github_oauth_client_id: str = "",
-    github_oauth_client_secret: str = "",
     github_token: str = "",
 ) -> dict:
     """Provision a Hetzner VPS with Coder installed for an org."""
@@ -217,8 +211,6 @@ async def provision_vps(
         github_org=github_org,
         repo_name=repo_name,
         managed_repos=managed_repos,
-        github_oauth_client_id=github_oauth_client_id,
-        github_oauth_client_secret=github_oauth_client_secret,
         github_token=github_token,
     )
 

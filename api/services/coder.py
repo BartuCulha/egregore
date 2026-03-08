@@ -43,7 +43,6 @@ class CoderClient:
         username: str,
         email: str,
         name: str = "",
-        password: Optional[str] = None,
     ) -> dict:
         """Create a Coder user. Returns user info or error."""
         async with httpx.AsyncClient(timeout=15) as client:
@@ -63,11 +62,9 @@ class CoderClient:
                 "username": username,
                 "email": email or f"{username}@users.noreply.github.com",
                 "name": name or username,
-                "login_type": "password",
+                "login_type": "github",
                 "disable_login": False,
             }
-            if password:
-                body["password"] = password
 
             resp = await client.post(
                 f"{self.base_url}/api/v2/users",
