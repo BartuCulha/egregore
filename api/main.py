@@ -3752,8 +3752,6 @@ async def hosting_provision(
         egregore_api_key=egregore_api_key,
         managed_repos=body.managed_repos,
         server_type=body.server_type,
-        github_oauth_client_id=body.github_oauth_client_id,
-        github_oauth_client_secret=body.github_oauth_client_secret,
         github_token=github_token,
     )
 
