@@ -94,6 +94,12 @@ variable "ghcr_token" {
   sensitive = true
 }
 
+variable "github_token" {
+  type        = string
+  sensitive   = true
+  description = "Org-level GitHub token for git operations (clone, push)"
+}
+
 # ─── Docker image ────────────────────────────────────────────────
 
 resource "docker_image" "egregore" {
@@ -110,10 +116,13 @@ resource "docker_container" "workspace" {
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
-    # Anthropic key fetched at startup from egregore.xyz/settings via API
-    # Org-level: shared across all workspaces
+    # Org-level GitHub token for git clone/push (all users share this for repo access)
+    "GITHUB_TOKEN=${var.github_token}",
+    # Org-level API key for Egregore API (Neo4j, notifications, etc.)
     "EGREGORE_API_KEY=${var.egregore_api_key}",
-    "GITHUB_TOKEN=${data.coder_workspace_owner.me.oidc_access_token}",
+    # Coder workspace owner info (for git identity + Anthropic key lookup)
+    "CODER_USERNAME=${data.coder_workspace_owner.me.name}",
+    # Org config
     "ORG_SLUG=${data.coder_parameter.org_slug.value}",
     "ORG_NAME=${data.coder_parameter.org_name.value}",
     "GITHUB_ORG=${data.coder_parameter.github_org.value}",
@@ -173,12 +182,12 @@ resource "coder_agent" "main" {
   }
 }
 
-# ─── Web terminal app ────────────────────────────────────────────
+# ─── Web terminal app (auto-starts Egregore) ─────────────────────
 
 resource "coder_app" "terminal" {
   agent_id     = coder_agent.main.id
   slug         = "terminal"
   display_name = "Terminal"
-  command      = "zsh"
   icon         = "/icon/terminal.svg"
+  command      = "/home/egregore/.egregore-bootstrap.sh"
 }
