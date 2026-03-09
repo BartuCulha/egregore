@@ -17,6 +17,14 @@ set -euo pipefail
 #   merge-person <keep-name> <remove-name>
 #                               Merge two Person nodes — transfers relationships from
 #                               remove-name to keep-name, stores remove-name as alias
+#   create-harvest <id> <topic> <intent> <initiator>
+#                               Create a Harvest node with INITIATED_BY link
+#   create-harvest-session <harvest-id> <session-id> <person-name>
+#                               Create a HarvestSession linked to Harvest and Person
+#   record-harvest-turn <session-id> <turn-num> <question> <intent> [answer] [evaluation]
+#                               Record a question-answer turn in a HarvestSession
+#   complete-harvest <harvest-id> <synthesis-path>
+#                               Mark harvest complete, create Artifact, link via PRODUCED
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 GS="$SCRIPT_DIR/bin/graph.sh"
@@ -243,12 +251,110 @@ case "$OP" in
     fi
     ;;
 
+  create-harvest)
+    HID="${1:?missing harvest-id}"
+    TOPIC="${2:?missing topic}"
+    INTENT="${3:?missing intent}"
+    INITIATOR="${4:?missing initiator}"
+    bash "$GS" query "
+      MATCH (p:Person {name: \$initiator})
+      CREATE (h:Harvest {
+        id: \$hid,
+        topic: \$topic,
+        intent: \$intent,
+        status: 'active',
+        created: datetime()
+      })
+      CREATE (h)-[:INITIATED_BY]->(p)
+      RETURN h.id AS id
+    " "{\"hid\":\"$HID\",\"topic\":\"$TOPIC\",\"intent\":\"$INTENT\",\"initiator\":\"$INITIATOR\"}"
+    ;;
+
+  create-harvest-session)
+    HID="${1:?missing harvest-id}"
+    HSID="${2:?missing session-id}"
+    PERSON="${3:?missing person-name}"
+    bash "$GS" query "
+      MATCH (h:Harvest {id: \$hid})
+      MATCH (p:Person {name: \$person})
+      CREATE (hs:HarvestSession {
+        id: \$hsid,
+        status: 'active',
+        created: datetime()
+      })
+      CREATE (h)-[:HAS_SESSION]->(hs)
+      CREATE (hs)-[:WITH]->(p)
+      RETURN hs.id AS id
+    " "{\"hid\":\"$HID\",\"hsid\":\"$HSID\",\"person\":\"$PERSON\"}"
+    ;;
+
+  record-harvest-turn)
+    HSID="${1:?missing session-id}"
+    TURN="${2:?missing turn-number}"
+    QUESTION="${3:?missing question}"
+    QINTENT="${4:?missing question-intent}"
+    ANSWER="${5:-}"
+    EVAL="${6:-}"
+    if [ -n "$ANSWER" ]; then
+      bash "$GS" query "
+        MATCH (hs:HarvestSession {id: \$hsid})
+        CREATE (t:HarvestTurn {
+          id: \$hsid + '-turn-' + \$turn,
+          turnNumber: toInteger(\$turn),
+          question: \$question,
+          questionIntent: \$qintent,
+          answer: \$answer,
+          evaluation: \$eval,
+          created: datetime(),
+          answeredAt: datetime()
+        })
+        CREATE (hs)-[:HAS_TURN]->(t)
+        RETURN t.id AS id
+      " "{\"hsid\":\"$HSID\",\"turn\":\"$TURN\",\"question\":\"$QUESTION\",\"qintent\":\"$QINTENT\",\"answer\":\"$ANSWER\",\"eval\":\"$EVAL\"}"
+    else
+      bash "$GS" query "
+        MATCH (hs:HarvestSession {id: \$hsid})
+        CREATE (t:HarvestTurn {
+          id: \$hsid + '-turn-' + \$turn,
+          turnNumber: toInteger(\$turn),
+          question: \$question,
+          questionIntent: \$qintent,
+          created: datetime()
+        })
+        CREATE (hs)-[:HAS_TURN]->(t)
+        RETURN t.id AS id
+      " "{\"hsid\":\"$HSID\",\"turn\":\"$TURN\",\"question\":\"$QUESTION\",\"qintent\":\"$QINTENT\"}"
+    fi
+    ;;
+
+  complete-harvest)
+    HID="${1:?missing harvest-id}"
+    SPATH="${2:?missing synthesis-path}"
+    bash "$GS" query "
+      MATCH (h:Harvest {id: \$hid})
+      SET h.status = 'complete', h.completedAt = datetime(), h.synthesisPath = \$spath
+      WITH h
+      CREATE (a:Artifact {
+        id: \$hid + '-synthesis',
+        title: 'Harvest synthesis: ' + h.topic,
+        type: 'harvest',
+        filePath: \$spath,
+        created: datetime()
+      })
+      CREATE (h)-[:PRODUCED]->(a)
+      WITH h
+      OPTIONAL MATCH (h)-[:HAS_SESSION]->(hs)
+      SET hs.status = 'complete', hs.completedAt = datetime()
+      RETURN h.id AS id, h.status AS status
+    " "{\"hid\":\"$HID\",\"spath\":\"$SPATH\"}"
+    ;;
+
   wal-status)
     bash "$SCRIPT_DIR/bin/graph-wal.sh" status
     ;;
 
   *)
-    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status"]}'
+    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest"]}'
     exit 1
     ;;
 

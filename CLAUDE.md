@@ -253,6 +253,8 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Spirits** — `/summon` (design + launch persistent agent processes — recurring loops or watchdogs)
+**Git** — `/branch` `/commit` `/push` `/pr` `/save`
+**Maintenance** — `/graph-maintain` (iterative graph hygiene, composable with `/loop`)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation** — when intent is ambiguous between similar commands:
@@ -267,6 +269,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
 - PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
 - Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop
+- Graph health: `/graph-maintain` (iterative fix, composable with `/loop`) vs `/graph-diagnostic` (one-time full capture) vs `/checkup` (env health)
 
 ## Socratic Questioning (MANDATORY)
 
