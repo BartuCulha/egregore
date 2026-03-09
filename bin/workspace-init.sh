@@ -6,6 +6,12 @@
 set -euo pipefail
 
 HOME_DIR="$HOME"
+
+# Fix volume ownership — Docker volumes may be owned by a different UID from
+# a previous image build. The egregore user has passwordless sudo.
+if [ -d "$HOME_DIR" ] && [ "$(stat -c '%u' "$HOME_DIR" 2>/dev/null)" != "$(id -u)" ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$HOME_DIR" 2>/dev/null || true
+fi
 EGREGORE_DIR="$HOME_DIR/egregore"
 MEMORY_DIR="$HOME_DIR/memory"
 
@@ -178,13 +184,13 @@ fi
 
 mkdir -p "$HOME_DIR/.egregore"
 
-# ─── Write bootstrap script (auto-start Egregore on terminal open) ─
+# ─── Ensure .zshrc exists (volume mount replaces image home dir) ──
 
-cat > "$HOME_DIR/.egregore-bootstrap.sh" <<'BOOTEOF'
-#!/bin/bash
-# Egregore bootstrap — auto-start Claude in egregore dir
+if [ ! -f "$HOME_DIR/.zshrc" ]; then
+  cat > "$HOME_DIR/.zshrc" <<'ZSHEOF'
+export PATH="/home/egregore/.local/bin:/opt/egregore/bin:$PATH"
 
-# Convenience command for manual restart
+# Restart Egregore manually
 egregore() {
   if [ -d "$HOME/egregore" ]; then
     cd ~/egregore && claude "start"
@@ -192,25 +198,17 @@ egregore() {
     echo "Workspace not ready. Restart from the Coder dashboard."
   fi
 }
-
-export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
-
-# Check if Anthropic key is missing
-if [ -f "$HOME/.egregore/.needs-anthropic-key" ]; then
-  echo ""
-  echo "  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
-  echo "  Anthropic API key not set."
-  echo ""
-  echo "  Go to egregore.xyz/settings to connect your"
-  echo "  Anthropic account, then restart this workspace."
-  echo "  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
-  echo ""
-  echo "  Type 'egregore' to retry after setting your key."
-  echo ""
-  exec zsh
+ZSHEOF
 fi
 
-# Start Egregore
+# ─── Write bootstrap script (auto-start Egregore on terminal open) ─
+
+cat > "$HOME_DIR/.egregore-bootstrap.sh" <<'BOOTEOF'
+#!/bin/bash
+# Egregore bootstrap — auto-start Claude in egregore dir
+export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+
+# Start Egregore — Claude Code handles its own auth (Max = OAuth popup, API = env var)
 if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
   cd ~/egregore
   exec claude "start"

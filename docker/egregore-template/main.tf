@@ -147,8 +147,8 @@ resource "docker_container" "workspace" {
 
   user = "egregore"
 
-  # Run Coder agent init script (downloads + starts the agent)
-  command = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
+  # Fix volume ownership (may differ between image builds) then start Coder agent
+  command = ["sh", "-c", "sudo chown -R $(id -u):$(id -g) $HOME 2>/dev/null; ${replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")}"]
 }
 
 # ─── Coder agent ─────────────────────────────────────────────────
@@ -160,11 +160,41 @@ resource "coder_agent" "main" {
 
   display_apps {
     vscode       = false
-    web_terminal = true
+    web_terminal = false
     ssh_helper   = true
   }
 
-  startup_script          = "/opt/egregore/bin/workspace-init.sh"
+  startup_script = <<-EOT
+    # Install Claude Code if missing (volume mount hides image's ~/.local/bin)
+    if ! command -v claude &>/dev/null; then
+      curl -fsSL https://claude.ai/install.sh | bash
+    fi
+
+    /opt/egregore/bin/workspace-init.sh
+
+    # Ensure .zshrc exists (volume mount replaces image home dir)
+    if [ ! -f "$HOME/.zshrc" ]; then
+      cat > "$HOME/.zshrc" <<'ZSHRC'
+    export PATH="/home/egregore/.local/bin:/opt/egregore/bin:$PATH"
+    egregore() { cd ~/egregore && claude "start"; }
+    ZSHRC
+    fi
+
+    # Write bootstrap — Claude Code handles its own auth (Max=OAuth, API=env var)
+    cat > "$HOME/.egregore-bootstrap.sh" <<'BOOT'
+    #!/bin/bash
+    export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+    if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
+      cd ~/egregore
+      exec claude "start"
+    else
+      echo "  Workspace setup incomplete. Type 'egregore' to retry."
+      exec zsh
+    fi
+    BOOT
+    chmod +x "$HOME/.egregore-bootstrap.sh"
+  EOT
+
   startup_script_behavior = "blocking"
 
   metadata {
