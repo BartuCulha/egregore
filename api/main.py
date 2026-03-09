@@ -821,13 +821,14 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
             try:
                 from .services import supabase as sb_join
                 org_row = sb_join.get_client().table("orgs").select(
-                    "hosting_enabled, hosting_coder_url, hosting_coder_token"
+                    "hosting_enabled, hosting_coder_url, hosting_coder_token, "
+                    "name, github_org, repo_name, managed_repos"
                 ).eq("slug", slug).execute()
                 if org_row.data and org_row.data[0].get("hosting_enabled"):
                     coder_username_for_join = user["login"]
-                    # Also create Coder user + workspace
-                    coder_url = org_row.data[0].get("hosting_coder_url", "")
-                    coder_token = org_row.data[0].get("hosting_coder_token", "")
+                    org_data = org_row.data[0]
+                    coder_url = org_data.get("hosting_coder_url", "")
+                    coder_token = org_data.get("hosting_coder_token", "")
                     if coder_url and coder_token:
                         from .services.coder import CoderClient
                         coder_client = CoderClient(coder_url, coder_token)
@@ -837,7 +838,14 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
                                 email=f"{user['login']}@users.noreply.github.com",
                                 name=user.get("name", user["login"]),
                             )
-                            await coder_client.create_workspace(owner=user["login"])
+                            await coder_client.create_workspace(
+                                owner=user["login"],
+                                org_slug=slug,
+                                org_name=org_data.get("name", slug),
+                                github_org=org_data.get("github_org", ""),
+                                repo_name=org_data.get("repo_name", "egregore-core"),
+                                managed_repos=org_data.get("managed_repos", ""),
+                            )
                             logger.info(f"Join: created Coder user+workspace for {user['login']} on {slug}")
                         except Exception as ce:
                             logger.warning(f"Join: Coder setup failed for {user['login']}: {ce}")
@@ -1870,11 +1878,13 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         try:
             from .services import supabase as sb
             rows = sb.get_client().table("orgs").select(
-                "hosting_enabled, hosting_coder_url, hosting_coder_token"
+                "hosting_enabled, hosting_coder_url, hosting_coder_token, "
+                "name, github_org, repo_name, managed_repos"
             ).eq("slug", slug).execute()
             if rows.data and rows.data[0].get("hosting_enabled"):
-                coder_url = rows.data[0].get("hosting_coder_url", "")
-                coder_token = rows.data[0].get("hosting_coder_token", "")
+                org_data = rows.data[0]
+                coder_url = org_data.get("hosting_coder_url", "")
+                coder_token = org_data.get("hosting_coder_token", "")
                 if coder_url and coder_token:
                     from .services.coder import CoderClient
                     coder_client = CoderClient(coder_url, coder_token)
@@ -1886,8 +1896,15 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
                         name=user.get("name", github_username),
                     )
                     logger.info(f"Coder user for invite: {github_username} → {coder_result.get('status')}")
-                    # Create workspace (so it's ready when they click "Open in browser")
-                    ws_result = await coder_client.create_workspace(owner=github_username)
+                    # Create workspace with org params
+                    ws_result = await coder_client.create_workspace(
+                        owner=github_username,
+                        org_slug=slug,
+                        org_name=org_data.get("name", slug),
+                        github_org=org_data.get("github_org", ""),
+                        repo_name=org_data.get("repo_name", "egregore-core"),
+                        managed_repos=org_data.get("managed_repos", ""),
+                    )
                     logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
                     # Store coder_username on membership so terminal URL works
                     try:
@@ -4135,6 +4152,97 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
         return {"url": coder_url}
 
     return {"url": f"{coder_url}/@{coder_username}/egregore/terminal"}
+
+
+@app.post("/api/hosting/workspace/{slug}")
+async def hosting_ensure_workspace(slug: str, github_username: str = Depends(validate_github_token)):
+    """Ensure a Coder user and workspace exist for this member.
+
+    Called when an existing member wants to open their hosted workspace.
+    Creates the Coder user + workspace if they don't exist yet, then
+    returns the terminal URL. Idempotent — safe to call multiple times.
+    """
+    from .services import supabase as sb
+    from .services.coder import CoderClient
+    from .services.hosting import get_coder_session_token
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    # Verify user is a member of this org
+    user = sb.get_user_by_github(github_username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    membership = sb.get_client().table("memberships").select(
+        "status, coder_username"
+    ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
+    if not membership.data or membership.data[0].get("status") != "active":
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    # Get org hosting info
+    org_row = sb.get_client().table("orgs").select(
+        "hosting_enabled, hosting_coder_url, hosting_coder_token, "
+        "hosting_coder_password, hosting_ip, "
+        "name, github_org, repo_name, managed_repos"
+    ).eq("slug", slug).execute()
+    if not org_row.data or not org_row.data[0].get("hosting_enabled"):
+        raise HTTPException(status_code=404, detail="Hosting not enabled for this org")
+
+    org = org_row.data[0]
+    coder_url = (org.get("hosting_coder_url") or "").rstrip("/")
+    if not coder_url:
+        raise HTTPException(status_code=503, detail="Coder not ready")
+
+    # Get a fresh session token (stored tokens can expire)
+    coder_token = org.get("hosting_coder_token") or ""
+    if not coder_token:
+        ip = org.get("hosting_ip", "")
+        password = org.get("hosting_coder_password", "")
+        if ip and password:
+            coder_token = await get_coder_session_token(ip, password)
+            if coder_token:
+                sb.get_client().table("orgs").update(
+                    {"hosting_coder_token": coder_token}
+                ).eq("slug", slug).execute()
+
+    if not coder_token:
+        raise HTTPException(status_code=503, detail="Cannot authenticate with Coder")
+
+    coder_client = CoderClient(coder_url, coder_token)
+
+    # Create user if needed
+    await coder_client.create_user(
+        username=github_username,
+        email=f"{github_username}@users.noreply.github.com",
+        name=user.get("display_name") or user.get("name") or github_username,
+    )
+
+    # Create workspace if needed (with org parameters)
+    ws_result = await coder_client.create_workspace(
+        owner=github_username,
+        org_slug=slug,
+        org_name=org.get("name", slug),
+        github_org=org.get("github_org", ""),
+        repo_name=org.get("repo_name", "egregore-core"),
+        managed_repos=org.get("managed_repos", ""),
+    )
+
+    # Store coder_username on membership
+    try:
+        sb.get_client().table("memberships").update(
+            {"coder_username": github_username}
+        ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
+    except Exception:
+        pass
+
+    terminal_url = f"{coder_url}/@{github_username}/egregore/terminal"
+
+    return {
+        "status": ws_result.get("status", "error"),
+        "terminal_url": terminal_url,
+        "coder_url": coder_url,
+    }
 
 
 # =============================================================================

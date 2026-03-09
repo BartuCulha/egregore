@@ -26,6 +26,8 @@ __pycache__
 .claude/commands/deploy-site.md
 .claude/commands/deploy-preview.md
 .claude/commands/waitlist.md
+.claude/commands/deploy-template.md
+.claude/commands/deploy-image.md
 
 # CL-only docs (not for public repo)
 docs

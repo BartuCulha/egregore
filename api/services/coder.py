@@ -121,6 +121,11 @@ class CoderClient:
         owner: str,
         template_name: str = "Egregore",
         workspace_name: str = "egregore",
+        org_slug: str = "",
+        org_name: str = "",
+        github_org: str = "",
+        repo_name: str = "egregore-core",
+        managed_repos: str = "",
     ) -> dict:
         """Create a workspace for a user and start it.
 
@@ -145,27 +150,39 @@ class CoderClient:
                 logger.warning(f"Template '{template_name}' not found on Coder instance")
                 return {"status": "error", "detail": f"Template '{template_name}' not found"}
 
-            # Get the latest template version
-            ver_resp = await client.get(
-                f"{self.base_url}/api/v2/templates/{template_id}/versions",
+            # Get the active template version
+            tmpl_resp = await client.get(
+                f"{self.base_url}/api/v2/templates/{template_id}",
                 headers=self._headers(),
             )
-            if ver_resp.status_code != 200:
-                return {"status": "error", "detail": f"Failed to get template versions: {ver_resp.status_code}"}
+            if tmpl_resp.status_code != 200:
+                return {"status": "error", "detail": f"Failed to get template: {tmpl_resp.status_code}"}
+            active_version_id = tmpl_resp.json().get("active_version_id")
 
-            versions = ver_resp.json()
-            if not versions:
-                return {"status": "error", "detail": "No template versions found"}
-            latest_version_id = versions[0]["id"]
+            # Build rich parameter values (org config for the workspace)
+            rich_params = []
+            if org_slug:
+                rich_params.append({"name": "org_slug", "value": org_slug})
+            if org_name:
+                rich_params.append({"name": "org_name", "value": org_name})
+            if github_org:
+                rich_params.append({"name": "github_org", "value": github_org})
+            if repo_name:
+                rich_params.append({"name": "repo_name", "value": repo_name})
+            rich_params.append({"name": "managed_repos", "value": managed_repos})
+
+            body = {
+                "name": workspace_name,
+                "template_version_id": active_version_id,
+            }
+            if rich_params:
+                body["rich_parameter_values"] = rich_params
 
             # Create workspace
             resp = await client.post(
                 f"{self.base_url}/api/v2/organizations/default/members/{owner}/workspaces",
                 headers=self._headers(),
-                json={
-                    "name": workspace_name,
-                    "template_version_id": latest_version_id,
-                },
+                json=body,
             )
 
             if resp.status_code in (200, 201):
