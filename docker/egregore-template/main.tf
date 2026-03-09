@@ -172,13 +172,18 @@ resource "coder_agent" "main" {
 
     /opt/egregore/bin/workspace-init.sh
 
-    # Ensure .zshrc exists (volume mount replaces image home dir)
-    if [ ! -f "$HOME/.zshrc" ]; then
-      cat > "$HOME/.zshrc" <<'ZSHRC'
-    export PATH="/home/egregore/.local/bin:/opt/egregore/bin:$PATH"
+    # Write .zshrc with auto-start (always overwrite — startup_script is the source of truth)
+    cat > "$HOME/.zshrc" <<'ZSHRC'
+    export PATH="/home/egregore/.local/bin:/home/egregore/.claude/bin:/opt/egregore/bin:$PATH"
     egregore() { cd ~/egregore && claude "start"; }
-    ZSHRC
+
+    # Auto-start Egregore on first interactive terminal (not subshells)
+    if [[ -o interactive ]] && [[ ! -f /tmp/.egregore-started ]] && [[ -d "$HOME/egregore" ]] && command -v claude &>/dev/null; then
+      touch /tmp/.egregore-started
+      cd ~/egregore
+      claude "start"
     fi
+    ZSHRC
 
     # Write bootstrap — Claude Code handles its own auth (Max=OAuth, API=env var)
     cat > "$HOME/.egregore-bootstrap.sh" <<'BOOT'
