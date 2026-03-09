@@ -108,6 +108,7 @@ async function install(data, ui, targetDir) {
     execFileSync("git", ["clone", authedForkUrl, egregoreDir], { stdio: "pipe", encoding: "utf-8", timeout: 60000 });
     try { run(`git remote set-url origin ${fork_url}`, { cwd: egregoreDir }); } catch {}
   }
+  try { run("git config credential.helper store", { cwd: egregoreDir }); } catch {}
   ui.success("Cloned egregore");
 
   // Set repo-local git identity from GitHub user (not machine-global config)
@@ -128,6 +129,13 @@ async function install(data, ui, targetDir) {
   } else {
     execFileSync("git", ["clone", authedMemoryUrl, memoryDir], { stdio: "pipe", encoding: "utf-8", timeout: 60000 });
     try { run(`git remote set-url origin ${memory_url}`, { cwd: memoryDir }); } catch {}
+  }
+  try { run("git config credential.helper store", { cwd: memoryDir }); } catch {}
+  if (github_username) {
+    try {
+      run(`git config user.name "${github_name || github_username}"`, { cwd: memoryDir });
+      run(`git config user.email "${github_username}@users.noreply.github.com"`, { cwd: memoryDir });
+    } catch {}
   }
   ui.success("Cloned memory");
 
@@ -196,6 +204,7 @@ async function install(data, ui, targetDir) {
         execFileSync("git", ["clone", embedToken(repoUrl, github_token), repoDir], { stdio: "pipe", encoding: "utf-8", timeout: 60000 });
         try { run(`git remote set-url origin ${repoUrl}`, { cwd: repoDir }); } catch {}
       }
+      try { run("git config credential.helper store", { cwd: repoDir }); } catch {}
       clonedRepos.push(repoName);
       ui.success(`Cloned ${repoName}`);
     } catch {
@@ -234,7 +243,8 @@ function embedToken(url, token) {
 
 function configureGitCredentials(token) {
   try {
-    run("git config credential.helper store");
+    // Use --global since this runs before any repos are cloned (no local .git exists)
+    run("git config --global credential.helper store");
     const credentialInput = `protocol=https\nhost=github.com\nusername=x-access-token\npassword=${token}\n`;
     execSync("git credential-store store", {
       input: credentialInput,
