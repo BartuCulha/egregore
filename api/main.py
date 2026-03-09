@@ -3369,7 +3369,7 @@ def _build_workspace_url(org_data: dict, membership: dict) -> str:
     coder_user = membership.get("coder_username") or ""
     if not coder_user:
         return coder_url
-    return f"{coder_url}/@{coder_user}/egregore/terminal"
+    return f"{coder_url}/@{coder_user}/egregore.main/terminal"
 
 
 @app.get("/api/me/egregores")
@@ -4151,7 +4151,7 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
     if not coder_username:
         return {"url": coder_url}
 
-    return {"url": f"{coder_url}/@{coder_username}/egregore/terminal"}
+    return {"url": f"{coder_url}/@{coder_username}/egregore.main/terminal"}
 
 
 @app.post("/api/hosting/workspace/{slug}")
@@ -4236,7 +4236,7 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
     except Exception:
         pass
 
-    terminal_url = f"{coder_url}/@{github_username}/egregore/terminal"
+    terminal_url = f"{coder_url}/@{github_username}/egregore.main/terminal"
 
     return {
         "status": ws_result.get("status", "error"),
