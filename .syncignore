@@ -50,7 +50,9 @@ tests
 data
 packages
 skills/cl-admin
+docker
 Dockerfile
+bin/workspace-init.sh
 DEV.md
 TELEGRAM_BOT_PLAN.md
 bin/preflight.sh
