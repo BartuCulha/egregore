@@ -52,6 +52,7 @@ packages
 skills/cl-admin
 docker
 Dockerfile
+.github/workflows/build-image.yml
 bin/workspace-init.sh
 DEV.md
 TELEGRAM_BOT_PLAN.md
