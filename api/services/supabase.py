@@ -375,12 +375,20 @@ def add_membership(
         if inviter:
             invited_by_id = inviter["id"]
 
+    # Check if membership already exists — don't overwrite role on existing members
+    existing = get_client().table("memberships").select("id, role").eq(
+        "org_slug", org_slug
+    ).eq("user_id", user_id).execute()
+
     data = {
         "org_slug": org_slug,
         "user_id": user_id,
-        "role": role,
         "status": "active",
     }
+    # Only set role on new memberships, preserve existing role
+    if not existing.data:
+        data["role"] = role
+
     if invited_by_id:
         data["invited_by"] = invited_by_id
     if display_name is not None:
