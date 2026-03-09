@@ -154,7 +154,7 @@ case "$OP" in
     bash "$GS" query "$CYPHER" "$PARAMS"
     ;;
 
-  create-pr)
+create-pr)
     SID="${1:?missing session-id}"
     PR_NUM="${2:?missing pr-number}"
     REPO="${3:?missing repo}"
@@ -190,6 +190,49 @@ case "$OP" in
     STATUS="${3:?missing status}"
     MERGED_AT="${4:-}"
     if [ -n "$MERGED_AT" ]; then
+
+mark-dormant)
+    QID="${1:?missing quest-id}"
+    bash "$GS" query "
+      MATCH (q:Quest {id: \$qid})
+      WHERE q.status = 'active'
+      SET q.status = 'dormant', q.dormantSince = date()
+      RETURN q.id AS id, q.title AS title, q.status AS status
+    " "{\"qid\":\"$QID\"}"
+    ;;
+
+  expire-handoffs)
+    # Mark pending handoffs older than 30 days as expired
+    bash "$GS" query "
+      MATCH (s:Session)-[:HANDED_TO]->(:Person)
+      WHERE s.handoffStatus = 'pending' AND s.date < date() - duration('P30D')
+      SET s.handoffStatus = 'expired', s.expiredAt = date()
+      RETURN count(s) AS expired, collect(s.id) AS ids
+    "
+    ;;
+
+  auto-link-topics)
+    # Link disconnected artifacts to best-matching quest by topic overlap
+    bash "$GS" query "
+      MATCH (a:Artifact)
+      WHERE NOT (a)-[:PART_OF]->(:Quest) AND a.topics IS NOT NULL AND size(a.topics) > 0
+      MATCH (q:Quest)
+      WHERE q.topics IS NOT NULL AND size(q.topics) > 0
+      WITH a, q, [t IN a.topics WHERE t IN q.topics] AS shared
+      WHERE size(shared) > 0
+      ORDER BY size(shared) DESC
+      WITH a, collect(q.id)[0] AS bestQuestId, collect(shared)[0] AS bestShared
+      MATCH (bq:Quest {id: bestQuestId})
+      MERGE (a)-[:PART_OF]->(bq)
+      RETURN a.id AS artifact, bq.id AS quest, bestShared AS sharedTopics
+    "
+    ;;
+
+  migrate-dates)
+    LABEL="${1:?missing label (Session or Artifact)}"
+    PROP="${2:?missing property (date or created)}"
+    # Guard: only allow known label+property combos
+    if [[ "$LABEL" == "Session" && "$PROP" == "date" ]]; then
       bash "$GS" query "
         MATCH (pr:PR {number: toInteger(\$num), repo: \$repo})
         SET pr.status = \$status, pr.mergedAt = datetime(\$mergedAt)
@@ -354,7 +397,7 @@ case "$OP" in
     ;;
 
   *)
-    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest"]}'
+echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest","pause-quest","mark-dormant","expire-handoffs","auto-link-topics","migrate-dates","link-artifact-quest"]}'
     exit 1
     ;;
 
