@@ -155,7 +155,7 @@ resource "docker_container" "workspace" {
 
 resource "coder_agent" "main" {
   os   = "linux"
-  arch = "amd64"
+  arch = "arm64"
   dir  = "/home/egregore/egregore"
 
   display_apps {
