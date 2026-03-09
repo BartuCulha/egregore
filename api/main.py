@@ -1660,23 +1660,52 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
         logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{body.repo_name}")
         github_result = {"status": "collaborator_failed", "reason": "Check token scopes (needs 'repo')"}
 
-    # Read org config for the invite token
-    config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
+    # Resolve org config from server-side sources (not from repo's egregore.json)
     org_name = owner
     slug = None
     repos = []
-    if config_raw:
-        config = json.loads(config_raw)
-        org_name = config.get("org_name", owner)
-        slug = config.get("slug")
-        repos = config.get("repos", [])
+    memory_repo = f"{owner}-memory"
+
+    # 1. Check ORG_CONFIGS (in-memory, loaded from env + Supabase on startup)
+    for cfg_slug, cfg in ORG_CONFIGS.items():
+        if cfg.get("github_org", "").lower() == owner.lower():
+            slug = cfg_slug
+            org_name = cfg.get("org_name", owner)
+            break
+
+    # 2. Fall back to Supabase lookup by github_org
+    if not slug and USE_SUPABASE:
+        try:
+            from .services.supabase import get_client
+            result = get_client().table("orgs").select("slug, name, github_org").eq("github_org", owner).limit(1).execute()
+            if result.data:
+                row = result.data[0]
+                slug = row["slug"]
+                org_name = row.get("name", owner)
+        except Exception as e:
+            logger.warning(f"Supabase org lookup failed for {owner}: {e}")
+
+    # 3. Last resort: read egregore.json from the repo (original behavior)
+    config = {}
+    if not slug:
+        config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
+        if config_raw:
+            config = json.loads(config_raw)
+            org_name = config.get("org_name", owner)
+            slug = config.get("slug")
+
     if not slug:
         raise HTTPException(
             status_code=400,
-            detail="egregore.json is missing 'slug' field. Org setup may be incomplete.",
+            detail="Could not resolve org slug. Org setup may be incomplete.",
         )
 
-    # Add as collaborator on the memory repo
+    # Read repo config for memory_repo and repos (best-effort from egregore.json)
+    if not config:
+        config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
+        if config_raw:
+            config = json.loads(config_raw)
+    repos = config.get("repos", [])
     memory_repo = config.get("memory_repo", f"{owner}-memory")
     if "/" in memory_repo:
         memory_repo_name = memory_repo.split("/")[-1].replace(".git", "")
