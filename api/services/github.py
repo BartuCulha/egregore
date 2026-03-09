@@ -523,7 +523,15 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
             timeout=10.0,
         )
     if resp.status_code == 404:
-        return True  # Branch doesn't exist, nothing to sync
+        # Branch doesn't exist — create it from main
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.post(
+                f"{API_BASE}/repos/{owner}/{repo}/git/refs",
+                headers=_headers(token),
+                json={"ref": f"refs/heads/{branch}", "sha": main_sha},
+                timeout=10.0,
+            )
+        return resp.status_code in (200, 201)
 
     # Force-update branch to main's SHA
     async with httpx.AsyncClient(follow_redirects=True) as client:
