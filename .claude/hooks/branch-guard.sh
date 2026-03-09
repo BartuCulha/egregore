@@ -146,6 +146,11 @@ case "$TOOL_NAME" in
       exit 0
     fi
 
+    # Allow branch cleanup (git push --delete) — not pushing to current branch
+    if echo "$COMMAND" | grep -qE 'git\s+push\s+.*--delete' 2>/dev/null; then
+      exit 0
+    fi
+
     # Only check commands that contain git commit or git push
     if echo "$COMMAND" | grep -qE 'git\s+(commit|push)' 2>/dev/null; then
       # Allow if targeting memory/ or a managed repo (separate repos, own branch model)
