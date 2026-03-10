@@ -4,7 +4,7 @@ set -euo pipefail
 # Granola local cache reader
 # Reads meeting data from Granola's local cache (no auth, no network)
 #
-# Cache structure (cache-v3.json):
+# Cache structure (cache-vN.json, auto-detected):
 #   { "cache": "<stringified JSON>" }
 #   Inner: { "state": { documents, documentLists, documentListsMetadata, documentPanels, transcripts, ... } }
 #
@@ -16,14 +16,9 @@ set -euo pipefail
 #   transcripts:            { doc_id: [{ text, start_timestamp, end_timestamp, source, ... }] }
 
 CACHE_DIR="$HOME/Library/Application Support/Granola"
-# Support cache-v3 and cache-v4 (Granola upgrades the version over time)
-if [ -f "$CACHE_DIR/cache-v4.json" ]; then
-  CACHE_FILE="$CACHE_DIR/cache-v4.json"
-elif [ -f "$CACHE_DIR/cache-v3.json" ]; then
-  CACHE_FILE="$CACHE_DIR/cache-v3.json"
-else
-  CACHE_FILE="$CACHE_DIR/cache-v4.json"  # will fail with clear message in check_cache
-fi
+# Auto-detect highest cache version (cache-vN.json)
+CACHE_FILE=$(ls -1 "$CACHE_DIR"/cache-v*.json 2>/dev/null | sort -t'v' -k2 -n | tail -1)
+CACHE_FILE="${CACHE_FILE:-$CACHE_DIR/cache-v3.json}"  # fallback for clear error in check_cache
 
 # --- Helpers ---
 
