@@ -18,6 +18,15 @@ case "$BRANCH" in
   *) exit 0 ;;
 esac
 
+# --- Maintainer fast-path ---
+# Founders/maintainers can push directly to develop (not main).
+# This unblocks shipping fixes without waiting on PR reviews.
+# main is always protected — use /release for that.
+USAGE_TYPE=$(jq -r '.usage_type // empty' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || true
+if [[ "$USAGE_TYPE" == "founder_group" || "$USAGE_TYPE" == "founder_solo" ]] && [[ "$BRANCH" == "develop" ]]; then
+  exit 0
+fi
+
 # --- Read tool input from stdin ---
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
