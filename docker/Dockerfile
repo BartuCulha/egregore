@@ -46,7 +46,7 @@ COPY CLAUDE.md /opt/egregore/CLAUDE.md
 COPY docker/egregore.json.template /opt/egregore/egregore.json.template
 
 # Make bin scripts executable
-RUN chmod +x /opt/egregore/bin/*.sh
+RUN chmod +x /opt/egregore/bin/*.sh /opt/egregore/bin/*.py
 
 USER egregore
 WORKDIR /home/egregore
