@@ -392,12 +392,68 @@ mark-dormant)
     " "{\"hid\":\"$HID\",\"spath\":\"$SPATH\"}"
     ;;
 
+  derive-topics)
+    # Derive topics from artifact titles when topics are null/empty
+    # Extracts keywords: lowercase, split on spaces/hyphens, filter stop words, take top 4
+    bash "$GS" query "
+      MATCH (a:Artifact)
+      WHERE (a.topics IS NULL OR size(a.topics) = 0) AND a.title IS NOT NULL
+      WITH a,
+        [word IN split(toLower(a.title), ' ')
+         WHERE size(word) > 2
+           AND NOT word IN ['the','and','for','with','from','into','that','this','are','was','has','have','will','can','its','but','not','all','also','been','more','than','very','about','just','over','such','after','other','which','their','would','there','each','make','like','does','most','only','some','them','these','those','then','what','when','where','who','how']
+        | word] AS words
+      WHERE size(words) > 0
+      SET a.topics = words[..4], a.topicsSource = 'derived-from-title'
+      RETURN a.id AS id, a.title AS title, a.topics AS topics
+    "
+    ;;
+
+  link-sessions-quests)
+    # Infer Session-[:ADVANCED]->Quest from artifact linkage
+    # If a session's author contributed artifacts to a quest, the session relates to that quest
+    bash "$GS" query "
+      MATCH (s:Session)-[:BY]->(p:Person)<-[:CONTRIBUTED_BY]-(a:Artifact)-[:PART_OF]->(q:Quest)
+      WHERE NOT (s)-[:ADVANCED]->(q)
+        AND s.date IS NOT NULL AND a.created IS NOT NULL
+        AND date(left(toString(s.date), 10)) = date(left(toString(a.created), 10))
+      MERGE (s)-[r:ADVANCED]->(q)
+      SET r.createdBy = 'graph-maintenance', r.via = 'artifact-linkage'
+      RETURN count(r) AS created
+    "
+    ;;
+
+  relate-by-title)
+    # RELATES_TO between artifacts with similar titles (sharing 2+ non-trivial words)
+    # Only for artifacts not already related
+    bash "$GS" query "
+      MATCH (a1:Artifact), (a2:Artifact)
+      WHERE a1 <> a2 AND id(a1) < id(a2)
+        AND a1.title IS NOT NULL AND a2.title IS NOT NULL
+        AND NOT (a1)-[:RELATES_TO]-(a2)
+      WITH a1, a2,
+        [w1 IN split(toLower(a1.title), ' ')
+         WHERE size(w1) > 3
+           AND NOT w1 IN ['the','and','for','with','from','into','that','this','egregore']
+        ] AS words1,
+        [w2 IN split(toLower(a2.title), ' ')
+         WHERE size(w2) > 3
+           AND NOT w2 IN ['the','and','for','with','from','into','that','this','egregore']
+        ] AS words2
+      WITH a1, a2, [w IN words1 WHERE w IN words2] AS shared
+      WHERE size(shared) >= 2
+      MERGE (a1)-[r:RELATES_TO]->(a2)
+      SET r.sharedWords = shared, r.reason = 'title-similarity', r.createdBy = 'graph-maintenance'
+      RETURN a1.id AS a, a2.id AS b, shared
+    "
+    ;;
+
   wal-status)
     bash "$SCRIPT_DIR/bin/graph-wal.sh" status
     ;;
 
   *)
-echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest","pause-quest","mark-dormant","expire-handoffs","auto-link-topics","migrate-dates","link-artifact-quest"]}'
+echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest","pause-quest","mark-dormant","expire-handoffs","auto-link-topics","migrate-dates","link-artifact-quest","derive-topics","link-sessions-quests","relate-by-title"]}'
     exit 1
     ;;
 
