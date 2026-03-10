@@ -212,7 +212,9 @@ mark-dormant)
     ;;
 
   auto-link-topics)
-    # Link disconnected artifacts to best-matching quest by topic overlap
+    # Link artifacts to quests using TF-IDF weighted topic specificity.
+    # Rare topics contribute more than common ones (onboarding, architecture).
+    # Links to ALL quests above threshold — multi-quest, not winner-take-all.
     bash "$GS" query "
       MATCH (a:Artifact)
       WHERE NOT (a)-[:PART_OF]->(:Quest) AND a.topics IS NOT NULL AND size(a.topics) > 0
