@@ -4312,6 +4312,74 @@ async def user_keys_delete(key_name: str, authorization: str = Header(...)):
     return {"status": "ok", "deleted": key_name}
 
 
+@app.get("/api/hosting/workspace-config/{slug}")
+async def hosting_workspace_config(
+    slug: str,
+    username: str = Query(...),
+    org: dict = Depends(validate_api_key),
+):
+    """Return all config a workspace needs to initialize.
+
+    Called once by workspace-init.py on startup. Single call replaces
+    multiple bash operations that used to fail silently.
+    """
+    from .services import supabase as sb
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    # Get org info
+    org_row = sb.get_client().table("orgs").select(
+        "slug, name, github_org, hosting_enabled, hosting_coder_url"
+    ).eq("slug", slug).execute()
+    if not org_row.data:
+        raise HTTPException(status_code=404, detail="Org not found")
+    org_data = org_row.data[0]
+
+    # Get memory repo URL from egregore.json config (stored as template var)
+    # We return it from the org table or fall back to convention
+    memory_repo = f"https://github.com/{org_data.get('github_org', '')}/{slug}-memory.git"
+
+    # Get user's Anthropic key if they have one
+    anthropic_key = ""
+    try:
+        from .services.keys import get_user_key
+        anthropic_key = get_user_key(username, "anthropic_api_key") or ""
+    except Exception:
+        pass
+
+    # Get user's membership info
+    user = sb.get_user_by_github(username)
+    display_name = ""
+    if user:
+        membership = sb.get_client().table("memberships").select(
+            "display_name, member_role, coder_username"
+        ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
+        if membership.data:
+            display_name = membership.data[0].get("display_name") or ""
+
+    return {
+        "egregore_json": {
+            "org_name": org_data.get("name", slug),
+            "github_org": org_data.get("github_org", ""),
+            "memory_repo": memory_repo,
+            "api_url": os.environ.get("API_URL", "https://egregore-production-55f2.up.railway.app"),
+            "slug": slug,
+            "repos": [],
+        },
+        "env_vars": {
+            "ANTHROPIC_API_KEY": anthropic_key,
+        },
+        "state": {
+            "org_setup": True,
+            "github_username": username,
+            "display_name": display_name or username,
+            "onboarding_complete": False,
+            "workspace_ready": True,
+        },
+    }
+
+
 @app.get("/api/user/keys/fetch")
 async def user_keys_fetch(
     key_name: str = Query(...),

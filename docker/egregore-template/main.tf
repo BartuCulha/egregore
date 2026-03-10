@@ -63,11 +63,15 @@ data "coder_parameter" "managed_repos" {
 }
 
 # ─── Workspace metadata ──────────────────────────────────────────
-# Note: Anthropic API key is NOT a Coder parameter. Users set their key
-# via egregore.xyz/settings, and workspace-init.sh fetches it from the API.
 
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
+
+# ─── External auth: user's GitHub token for private repo access ──
+
+data "coder_external_auth" "github" {
+  id = "github"
+}
 
 # ─── Org-level secrets (set by admin in Coder template variables) ─
 
@@ -97,7 +101,7 @@ variable "ghcr_token" {
 variable "github_token" {
   type        = string
   sensitive   = true
-  description = "Org-level GitHub token for git operations (clone, push)"
+  description = "Org-level GitHub token for API operations (graph, notifications)"
 }
 
 # ─── Docker image ────────────────────────────────────────────────
@@ -116,13 +120,12 @@ resource "docker_container" "workspace" {
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
-    # Org-level GitHub token for git clone/push (all users share this for repo access)
+    # Org-level tokens for API operations (NOT for git cloning — that uses external auth)
     "GITHUB_TOKEN=${var.github_token}",
-    # Org-level API key for Egregore API (Neo4j, notifications, etc.)
     "EGREGORE_API_KEY=${var.egregore_api_key}",
-    # Coder workspace owner info (for git identity + Anthropic key lookup)
+    # User identity
     "CODER_USERNAME=${data.coder_workspace_owner.me.name}",
-    # Org config
+    # Org config (used by Python init as fallback if API unreachable)
     "ORG_SLUG=${data.coder_parameter.org_slug.value}",
     "ORG_NAME=${data.coder_parameter.org_name.value}",
     "GITHUB_ORG=${data.coder_parameter.github_org.value}",
@@ -170,7 +173,39 @@ resource "coder_agent" "main" {
       curl -fsSL https://claude.ai/install.sh | bash
     fi
 
-    /opt/egregore/bin/workspace-init.sh
+    # Clone repos using Coder's external auth (user's own GitHub token via GIT_ASKPASS)
+    EGREGORE_DIR="$HOME/egregore"
+    MEMORY_DIR="$HOME/memory"
+
+    if [ ! -d "$EGREGORE_DIR/.git" ]; then
+      git clone "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo"
+    else
+      cd "$EGREGORE_DIR" && git fetch origin --quiet 2>/dev/null || true
+      BRANCH=$(git branch --show-current 2>/dev/null)
+      if [ "$BRANCH" = "develop" ] || [ "$BRANCH" = "main" ]; then
+        git pull --ff-only origin "$BRANCH" 2>/dev/null || true
+      fi
+    fi
+
+    if [ -n "${var.memory_url}" ] && [ ! -d "$MEMORY_DIR/.git" ]; then
+      git clone "${var.memory_url}" "$MEMORY_DIR" 2>&1 || echo "[init] Warning: could not clone memory repo"
+    elif [ -d "$MEMORY_DIR/.git" ]; then
+      cd "$MEMORY_DIR" && git pull --ff-only origin main 2>/dev/null || true
+    fi
+
+    # Link memory if cloned
+    if [ -d "$MEMORY_DIR/.git" ] && [ -d "$EGREGORE_DIR" ]; then
+      ln -sfn "$MEMORY_DIR" "$EGREGORE_DIR/memory"
+    fi
+
+    # Write config from API (Python — no bash fragility)
+    python3 /opt/egregore/bin/workspace-init.py
+
+    # Set git identity
+    if [ -n "$CODER_USERNAME" ] && [ -z "$(git config --global user.name 2>/dev/null)" ]; then
+      git config --global user.name "$CODER_USERNAME"
+      git config --global user.email "$CODER_USERNAME@users.noreply.github.com"
+    fi
 
     # Write .zshrc with auto-start (always overwrite — startup_script is the source of truth)
     cat > "$HOME/.zshrc" <<'ZSHRC'
