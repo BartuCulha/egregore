@@ -4180,6 +4180,9 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
     if not membership.data or membership.data[0].get("status") != "active":
         raise HTTPException(status_code=403, detail="Not a member of this org")
 
+    # Use existing Coder username if set, otherwise fall back to GitHub username
+    coder_username = membership.data[0].get("coder_username") or github_username
+
     # Get org hosting info
     org_row = sb.get_client().table("orgs").select(
         "hosting_enabled, hosting_coder_url, hosting_coder_token, "
@@ -4211,16 +4214,16 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
 
     coder_client = CoderClient(coder_url, coder_token)
 
-    # Create user if needed
+    # Create user if needed (uses coder_username — may differ from GitHub username)
     await coder_client.create_user(
-        username=github_username,
+        username=coder_username,
         email=f"{github_username}@users.noreply.github.com",
         name=user.get("display_name") or user.get("name") or github_username,
     )
 
     # Create workspace if needed (with org parameters)
     ws_result = await coder_client.create_workspace(
-        owner=github_username,
+        owner=coder_username,
         org_slug=slug,
         org_name=org.get("name", slug),
         github_org=org.get("github_org", ""),
@@ -4228,15 +4231,16 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
         managed_repos=org.get("managed_repos", ""),
     )
 
-    # Store coder_username on membership
-    try:
-        sb.get_client().table("memberships").update(
-            {"coder_username": github_username}
-        ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
-    except Exception:
-        pass
+    # Store coder_username on membership if not already set
+    if not membership.data[0].get("coder_username"):
+        try:
+            sb.get_client().table("memberships").update(
+                {"coder_username": coder_username}
+            ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
+        except Exception:
+            pass
 
-    terminal_url = f"{coder_url}/@{github_username}/egregore.main/terminal"
+    terminal_url = f"{coder_url}/@{coder_username}/egregore.main/terminal"
 
     return {
         "status": ws_result.get("status", "error"),
@@ -4255,6 +4259,16 @@ async def hosting_workspace_status(
 
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    # Look up coder_username from membership (may differ from GitHub username)
+    user = sb.get_user_by_github(github_username)
+    coder_username = github_username
+    if user:
+        mem = sb.get_client().table("memberships").select(
+            "coder_username"
+        ).eq("org_slug", slug).eq("user_id", user["id"]).execute()
+        if mem.data and mem.data[0].get("coder_username"):
+            coder_username = mem.data[0]["coder_username"]
 
     rows = sb.get_client().table("orgs").select(
         "hosting_enabled, hosting_coder_url, hosting_coder_token, hosting_ip, hosting_coder_password"
@@ -4276,8 +4290,8 @@ async def hosting_workspace_status(
         raise HTTPException(status_code=503, detail="Cannot authenticate with Coder")
 
     coder_client = CoderClient(coder_url, coder_token)
-    status = await coder_client.get_workspace_status(owner=github_username)
-    terminal_url = f"{coder_url}/@{github_username}/egregore.main/terminal"
+    status = await coder_client.get_workspace_status(owner=coder_username)
+    terminal_url = f"{coder_url}/@{coder_username}/egregore.main/terminal"
 
     return {
         **status,
