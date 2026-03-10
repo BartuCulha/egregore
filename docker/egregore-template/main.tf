@@ -192,7 +192,7 @@ resource "coder_agent" "main" {
 
     # ── Clone repos ───────────────────────────────────────────────────
     if [ ! -d "$EGREGORE_DIR/.git" ]; then
-      git clone "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo"
+      git clone --branch develop "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo"
     else
       cd "$EGREGORE_DIR" && git fetch origin --quiet 2>/dev/null || true
       BRANCH=$(git branch --show-current 2>/dev/null)
