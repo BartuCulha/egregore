@@ -255,8 +255,8 @@ cmd_list() {
         if [ "$id_count" -gt 0 ]; then
           local batch_resp
           batch_resp=$(api_call "/v1/get-documents-batch" "{\"document_ids\":$doc_ids_json,\"include_last_viewed_panel\":false}" 2>/dev/null) || true
-          if echo "$batch_resp" | jq -e '.documents' >/dev/null 2>&1; then
-            result=$(echo "$batch_resp" | jq '[.documents[] |
+          if echo "$batch_resp" | jq -e '.docs // .documents' >/dev/null 2>&1; then
+            result=$(echo "$batch_resp" | jq '[(.docs // .documents)[] |
               select(.deleted_at == null) |
               {
                 id: .id,
@@ -362,9 +362,9 @@ cmd_get() {
     local batch_resp transcript_resp
     batch_resp=$(api_call "/v1/get-documents-batch" "{\"document_ids\":[\"$doc_id\"],\"include_last_viewed_panel\":true}" 2>/dev/null) || true
 
-    if echo "$batch_resp" | jq -e '.documents[0]' >/dev/null 2>&1; then
+    if echo "$batch_resp" | jq -e '(.docs // .documents)[0]' >/dev/null 2>&1; then
       local doc
-      doc=$(echo "$batch_resp" | jq '.documents[0]')
+      doc=$(echo "$batch_resp" | jq '(.docs // .documents)[0]')
 
       # Get transcript
       transcript_resp=$(api_call "/v1/get-document-transcript" "{\"document_id\":\"$doc_id\"}" 2>/dev/null) || true
@@ -373,12 +373,26 @@ cmd_get() {
       # Try notes_markdown first
       panel_text=$(echo "$doc" | jq -r '.notes_markdown // empty')
 
-      # Fall back to ProseMirror panel content
+      # Fall back to ProseMirror panel content → convert to markdown
       if [ -z "$panel_text" ]; then
         panel_text=$(echo "$doc" | jq -r '
-          .last_viewed_panel.content // empty |
-          [.. | select(.type? == "text") | .text] |
-          join(" ")
+          def pm_to_md:
+            if type != "object" then ""
+            elif .type == "text" then (.text // "")
+            elif .type == "heading" then
+              ("#" * (.attrs.level // 1)) + " " + ([.content[]? | pm_to_md] | join("")) + "\n\n"
+            elif .type == "paragraph" then
+              ([.content[]? | pm_to_md] | join("")) + "\n\n"
+            elif .type == "bulletList" then
+              ([.content[]? | pm_to_md] | join(""))
+            elif .type == "listItem" then
+              "- " + ([.content[]? | pm_to_md] | join("") | ltrimstr("- "))
+            elif .type == "doc" then
+              ([.content[]? | pm_to_md] | join(""))
+            else
+              ([.content[]? | pm_to_md] | join(""))
+            end;
+          .last_viewed_panel.content // empty | pm_to_md
         ' 2>/dev/null || echo "")
       fi
 
