@@ -215,18 +215,34 @@ mark-dormant)
     # Link artifacts to quests using TF-IDF weighted topic specificity.
     # Rare topics contribute more than common ones (onboarding, architecture).
     # Links to ALL quests above threshold — multi-quest, not winner-take-all.
+    # Step 1: Compute IDF table (how rare each topic is across all artifacts)
+    # Step 2: For each unlinked artifact x quest pair, score by sum of shared topic IDFs
+    # Step 3: Link to ALL quests scoring above threshold (multi-quest, not winner-take-all)
+    # Step 4: Store specificity score on edge for Witness quality evaluation
     bash "$GS" query "
+      MATCH (allA:Artifact)
+      WHERE allA.topics IS NOT NULL
+      UNWIND allA.topics AS t
+      WITH t, count(allA) AS docFreq
+      WITH collect({topic: t, idf: 1.0 / log(toFloat(docFreq) + 1.0)}) AS idfTable
       MATCH (a:Artifact)
       WHERE NOT (a)-[:PART_OF]->(:Quest) AND a.topics IS NOT NULL AND size(a.topics) > 0
       MATCH (q:Quest)
       WHERE q.topics IS NOT NULL AND size(q.topics) > 0
-      WITH a, q, [t IN a.topics WHERE t IN q.topics] AS shared
+      WITH a, q, idfTable, [t IN a.topics WHERE t IN q.topics] AS shared
       WHERE size(shared) > 0
-      ORDER BY size(shared) DESC
-      WITH a, collect(q.id)[0] AS bestQuestId, collect(shared)[0] AS bestShared
-      MATCH (bq:Quest {id: bestQuestId})
-      MERGE (a)-[:PART_OF]->(bq)
-      RETURN a.id AS artifact, bq.id AS quest, bestShared AS sharedTopics
+      WITH a, q, shared,
+        reduce(score = 0.0, t IN shared |
+          score + coalesce([x IN idfTable WHERE x.topic = t | x.idf][0], 0.1)
+        ) AS specificity
+      WHERE specificity > 0.5
+      MERGE (a)-[r:PART_OF]->(q)
+      SET r.specificity = round(specificity * 100.0) / 100.0,
+          r.sharedTopics = shared,
+          r.createdBy = 'graph-maintenance-tfidf'
+      RETURN a.id AS artifact, q.id AS quest, shared AS sharedTopics,
+             round(specificity * 100.0) / 100.0 AS score
+      ORDER BY score DESC
     "
     ;;
 
