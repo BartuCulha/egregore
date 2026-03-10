@@ -4184,7 +4184,7 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
     org_row = sb.get_client().table("orgs").select(
         "hosting_enabled, hosting_coder_url, hosting_coder_token, "
         "hosting_coder_password, hosting_ip, "
-        "name, github_org, repo_name, managed_repos"
+        "name, github_org"
     ).eq("slug", slug).execute()
     if not org_row.data or not org_row.data[0].get("hosting_enabled"):
         raise HTTPException(status_code=404, detail="Hosting not enabled for this org")
