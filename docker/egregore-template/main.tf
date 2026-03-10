@@ -173,32 +173,8 @@ resource "coder_agent" "main" {
       curl -fsSL https://claude.ai/install.sh | bash
     fi
 
-    # Clone repos using Coder's external auth (user's own GitHub token via GIT_ASKPASS)
-    EGREGORE_DIR="$HOME/egregore"
-    MEMORY_DIR="$HOME/memory"
-
-    if [ ! -d "$EGREGORE_DIR/.git" ]; then
-      git clone "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo"
-    else
-      cd "$EGREGORE_DIR" && git fetch origin --quiet 2>/dev/null || true
-      BRANCH=$(git branch --show-current 2>/dev/null)
-      if [ "$BRANCH" = "develop" ] || [ "$BRANCH" = "main" ]; then
-        git pull --ff-only origin "$BRANCH" 2>/dev/null || true
-      fi
-    fi
-
-    if [ -n "${var.memory_url}" ] && [ ! -d "$MEMORY_DIR/.git" ]; then
-      git clone "${var.memory_url}" "$MEMORY_DIR" 2>&1 || echo "[init] Warning: could not clone memory repo"
-    elif [ -d "$MEMORY_DIR/.git" ]; then
-      cd "$MEMORY_DIR" && git pull --ff-only origin main 2>/dev/null || true
-    fi
-
-    # Link memory if cloned
-    if [ -d "$MEMORY_DIR/.git" ] && [ -d "$EGREGORE_DIR" ]; then
-      ln -sfn "$MEMORY_DIR" "$EGREGORE_DIR/memory"
-    fi
-
-    # Write config from API (Python — no bash fragility)
+    # ── Config first (no git needed) ──────────────────────────────────
+    # Write config from API — this must run before anything that depends on egregore.json
     python3 /opt/egregore/bin/workspace-init.py
 
     # Set git identity
@@ -209,33 +185,58 @@ resource "coder_agent" "main" {
 
     # Write .zshrc with auto-start (always overwrite — startup_script is the source of truth)
     cat > "$HOME/.zshrc" <<'ZSHRC'
-    export PATH="/home/egregore/.local/bin:/home/egregore/.claude/bin:/opt/egregore/bin:$PATH"
-    egregore() { cd ~/egregore && claude "start"; }
+export PATH="/home/egregore/.local/bin:/home/egregore/.claude/bin:/opt/egregore/bin:$PATH"
+egregore() { cd ~/egregore && claude "start"; }
 
-    # Auto-start Egregore on first interactive terminal (not subshells)
-    if [[ -o interactive ]] && [[ ! -f /tmp/.egregore-started ]] && [[ -d "$HOME/egregore" ]] && command -v claude &>/dev/null; then
-      touch /tmp/.egregore-started
-      cd ~/egregore
-      claude "start"
-    fi
-    ZSHRC
+# Auto-start Egregore on first interactive terminal (not subshells)
+if [[ -o interactive ]] && [[ ! -f /tmp/.egregore-started ]] && [[ -d "$HOME/egregore" ]] && command -v claude &>/dev/null; then
+  touch /tmp/.egregore-started
+  cd ~/egregore
+  claude "start"
+fi
+ZSHRC
 
-    # Write bootstrap — Claude Code handles its own auth (Max=OAuth, API=env var)
+    # Write bootstrap script
     cat > "$HOME/.egregore-bootstrap.sh" <<'BOOT'
-    #!/bin/bash
-    export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
-    if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
-      cd ~/egregore
-      exec claude "start"
-    else
-      echo "  Workspace setup incomplete. Type 'egregore' to retry."
-      exec zsh
-    fi
-    BOOT
+#!/bin/bash
+export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
+  cd ~/egregore
+  exec claude "start"
+else
+  echo "  Workspace setup incomplete. Type 'egregore' to retry."
+  exec zsh
+fi
+BOOT
     chmod +x "$HOME/.egregore-bootstrap.sh"
+
+    # ── Clone repos (with timeout — external auth may not be ready) ───
+    EGREGORE_DIR="$HOME/egregore"
+    MEMORY_DIR="$HOME/memory"
+
+    if [ ! -d "$EGREGORE_DIR/.git" ]; then
+      timeout 30 git clone "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo (auth may be pending)"
+    else
+      cd "$EGREGORE_DIR" && git fetch origin --quiet 2>/dev/null || true
+      BRANCH=$(git branch --show-current 2>/dev/null)
+      if [ "$BRANCH" = "develop" ] || [ "$BRANCH" = "main" ]; then
+        git pull --ff-only origin "$BRANCH" 2>/dev/null || true
+      fi
+    fi
+
+    if [ -n "${var.memory_url}" ] && [ ! -d "$MEMORY_DIR/.git" ]; then
+      timeout 30 git clone "${var.memory_url}" "$MEMORY_DIR" 2>&1 || echo "[init] Warning: could not clone memory repo"
+    elif [ -d "$MEMORY_DIR/.git" ]; then
+      cd "$MEMORY_DIR" && git pull --ff-only origin main 2>/dev/null || true
+    fi
+
+    # Link memory if cloned
+    if [ -d "$MEMORY_DIR/.git" ] && [ -d "$EGREGORE_DIR" ]; then
+      ln -sfn "$MEMORY_DIR" "$EGREGORE_DIR/memory"
+    fi
   EOT
 
-  startup_script_behavior = "blocking"
+  startup_script_behavior = "non-blocking"
 
   metadata {
     key          = "org"
