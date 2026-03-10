@@ -193,6 +193,26 @@ class CoderClient:
                 return {"status": "error", "detail": resp.text[:200]}
 
 
+    async def get_workspace_status(self, owner: str, workspace_name: str = "egregore") -> dict:
+        """Check workspace and agent status. Returns ready=True when the agent is connected."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            workspaces = await self.list_workspaces(owner=owner)
+            for ws in workspaces:
+                if ws.get("name") == workspace_name:
+                    build_status = ws.get("latest_build", {}).get("status", "unknown")
+                    # Check agent status
+                    agent_status = "unknown"
+                    for resource in ws.get("latest_build", {}).get("resources", []):
+                        for agent in resource.get("agents", []):
+                            agent_status = agent.get("status", "unknown")
+                    return {
+                        "found": True,
+                        "build_status": build_status,
+                        "agent_status": agent_status,
+                        "ready": build_status == "running" and agent_status == "connected",
+                    }
+            return {"found": False, "ready": False}
+
     async def create_user_token(self, username: str, lifetime_seconds: int = 600) -> str:
         """Create a short-lived API token for a user. Returns the token string or empty."""
         async with httpx.AsyncClient(timeout=10) as client:

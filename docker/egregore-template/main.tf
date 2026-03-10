@@ -173,10 +173,24 @@ resource "coder_agent" "main" {
       curl -fsSL https://claude.ai/install.sh | bash
     fi
 
-    # Clone repos using Coder's external auth (user's own GitHub token via GIT_ASKPASS)
+    # ── Git setup ─────────────────────────────────────────────────────
     EGREGORE_DIR="$HOME/egregore"
     MEMORY_DIR="$HOME/memory"
 
+    # Git credentials (org-level token for cloning private repos)
+    if [ -n "$GITHUB_TOKEN" ]; then
+      git config --global credential.helper store
+      echo "https://x-access-token:$${GITHUB_TOKEN}@github.com" > "$HOME/.git-credentials"
+      chmod 600 "$HOME/.git-credentials"
+    fi
+
+    # Git identity
+    if [ -n "$CODER_USERNAME" ] && [ -z "$(git config --global user.name 2>/dev/null)" ]; then
+      git config --global user.name "$CODER_USERNAME"
+      git config --global user.email "$CODER_USERNAME@users.noreply.github.com"
+    fi
+
+    # ── Clone repos ───────────────────────────────────────────────────
     if [ ! -d "$EGREGORE_DIR/.git" ]; then
       git clone "${var.fork_url}" "$EGREGORE_DIR" 2>&1 || echo "[init] Warning: could not clone egregore repo"
     else
@@ -198,40 +212,33 @@ resource "coder_agent" "main" {
       ln -sfn "$MEMORY_DIR" "$EGREGORE_DIR/memory"
     fi
 
-    # Write config from API (Python — no bash fragility)
+    # ── Config from API (writes into cloned repo dir) ─────────────────
     python3 /opt/egregore/bin/workspace-init.py
 
-    # Set git identity
-    if [ -n "$CODER_USERNAME" ] && [ -z "$(git config --global user.name 2>/dev/null)" ]; then
-      git config --global user.name "$CODER_USERNAME"
-      git config --global user.email "$CODER_USERNAME@users.noreply.github.com"
-    fi
-
-    # Write .zshrc with auto-start (always overwrite — startup_script is the source of truth)
+    # ── Shell setup ───────────────────────────────────────────────────
     cat > "$HOME/.zshrc" <<'ZSHRC'
-    export PATH="/home/egregore/.local/bin:/home/egregore/.claude/bin:/opt/egregore/bin:$PATH"
-    egregore() { cd ~/egregore && claude "start"; }
+export PATH="/home/egregore/.local/bin:/home/egregore/.claude/bin:/opt/egregore/bin:$PATH"
+egregore() { cd ~/egregore && claude "start"; }
 
-    # Auto-start Egregore on first interactive terminal (not subshells)
-    if [[ -o interactive ]] && [[ ! -f /tmp/.egregore-started ]] && [[ -d "$HOME/egregore" ]] && command -v claude &>/dev/null; then
-      touch /tmp/.egregore-started
-      cd ~/egregore
-      claude "start"
-    fi
-    ZSHRC
+# Auto-start Egregore on first interactive terminal (not subshells)
+if [[ -o interactive ]] && [[ ! -f /tmp/.egregore-started ]] && [[ -d "$HOME/egregore" ]] && command -v claude &>/dev/null; then
+  touch /tmp/.egregore-started
+  cd ~/egregore
+  claude "start"
+fi
+ZSHRC
 
-    # Write bootstrap — Claude Code handles its own auth (Max=OAuth, API=env var)
     cat > "$HOME/.egregore-bootstrap.sh" <<'BOOT'
-    #!/bin/bash
-    export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
-    if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
-      cd ~/egregore
-      exec claude "start"
-    else
-      echo "  Workspace setup incomplete. Type 'egregore' to retry."
-      exec zsh
-    fi
-    BOOT
+#!/bin/bash
+export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+if [ -d "$HOME/egregore" ] && command -v claude &>/dev/null; then
+  cd ~/egregore
+  exec claude "start"
+else
+  echo "  Workspace setup incomplete. Type 'egregore' to retry."
+  exec zsh
+fi
+BOOT
     chmod +x "$HOME/.egregore-bootstrap.sh"
   EOT
 
