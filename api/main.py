@@ -4245,6 +4245,46 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
     }
 
 
+@app.get("/api/hosting/workspace-status/{slug}")
+async def hosting_workspace_status(
+    slug: str,
+    github_username: str = Depends(validate_github_token),
+):
+    """Check if the user's workspace is ready (agent connected)."""
+    from .services import supabase as sb
+
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    rows = sb.get_client().table("orgs").select(
+        "hosting_enabled, hosting_coder_url, hosting_coder_token, hosting_ip, hosting_coder_password"
+    ).eq("slug", slug).execute()
+    if not rows.data or not rows.data[0].get("hosting_enabled"):
+        raise HTTPException(status_code=404, detail="Hosting not enabled")
+
+    org = rows.data[0]
+    coder_url = (org.get("hosting_coder_url") or "").rstrip("/")
+    coder_token = org.get("hosting_coder_token", "")
+
+    if not coder_token:
+        ip = org.get("hosting_ip", "")
+        password = org.get("hosting_coder_password", "")
+        if ip and password:
+            coder_token = await get_coder_session_token(ip, password)
+
+    if not coder_token:
+        raise HTTPException(status_code=503, detail="Cannot authenticate with Coder")
+
+    coder_client = CoderClient(coder_url, coder_token)
+    status = await coder_client.get_workspace_status(owner=github_username)
+    terminal_url = f"{coder_url}/@{github_username}/egregore.main/terminal"
+
+    return {
+        **status,
+        "terminal_url": terminal_url,
+    }
+
+
 # =============================================================================
 # USER API KEYS
 # =============================================================================
