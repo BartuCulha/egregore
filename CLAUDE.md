@@ -112,7 +112,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
 
 ## Notifications
 
