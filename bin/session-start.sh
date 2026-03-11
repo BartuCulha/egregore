@@ -892,6 +892,35 @@ CONTEXT_TEAM=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
 CONTEXT_SOUL=$(cat "$CTX_DIR/soul_summary" 2>/dev/null || echo "")
 CONTEXT_LIFECYCLE=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}')
 
+# --- Write compact subagent context cache (reuses already-gathered data) ---
+SUBAGENT_CTX="/tmp/egregore-subagent-ctx-${EGREGORE_SESSION_ID}.txt"
+(
+  SA_ORG_NAME=$(jq -r '.org_name // "Unknown"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "Unknown")
+  SA_GITHUB_ORG=$(jq -r '.github_org // "unknown"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "unknown")
+
+  # Format quests list
+  SA_QUESTS="none"
+  if [ "$CONTEXT_QUESTS" != "[]" ]; then
+    SA_QUESTS=$(echo "$CONTEXT_QUESTS" | jq -r '.[]' 2>/dev/null | paste -sd', ' - 2>/dev/null || echo "none")
+  fi
+
+  # Format recent handoffs
+  SA_HANDOFFS="none"
+  if [ "$CONTEXT_HANDOFFS" != "[]" ]; then
+    SA_HANDOFFS=$(echo "$CONTEXT_HANDOFFS" | jq -r '.[] | .name' 2>/dev/null | head -5 | paste -sd', ' - 2>/dev/null || echo "none")
+  fi
+
+  cat > "$SUBAGENT_CTX" << SAEOF
+<!-- egregore-context
+Organization: $SA_ORG_NAME (github: $SA_GITHUB_ORG)
+Session: $BRANCH — ${EGREGORE_SESSION_ID}
+Active quests: $SA_QUESTS
+Recent handoffs: $SA_HANDOFFS
+Memory: memory/ is a symlink to shared knowledge base. Use bin/graph.sh for Neo4j queries.
+-->
+SAEOF
+) 2>/dev/null || true
+
 cat << CTXEOF
 
 <!-- session-context
