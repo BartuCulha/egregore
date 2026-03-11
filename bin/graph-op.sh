@@ -132,12 +132,35 @@ case "$OP" in
     " "{\"keep\":\"$KEEP\",\"remove\":\"$REMOVE\"}"
     ;;
 
+  claim-handoff)
+    IMPL_SID="${1:?missing implementing-session-id}"
+    HO_SID="${2:?missing handoff-session-id}"
+    CYPHER="
+      MATCH (impl:Session {id: \$implSid}), (ho:Session {id: \$hoSid})
+      WHERE ho.handoffStatus IS NOT NULL
+      MERGE (impl)-[:IMPLEMENTS]->(ho)
+      RETURN impl.id AS implementor, ho.id AS handoff, ho.topic AS topic
+    "
+    PARAMS="{\"implSid\":\"$IMPL_SID\",\"hoSid\":\"$HO_SID\"}"
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$PARAMS"
+    ;;
+
+  check-implements)
+    SID="${1:?missing session-id}"
+    bash "$GS" query "
+      MATCH (impl:Session {id: \$sid})-[:IMPLEMENTS]->(ho:Session)-[:BY]->(author:Person)
+      RETURN ho.id AS handoffId, ho.topic AS topic, author.name AS author,
+             author.github AS authorGithub
+    " "{\"sid\":\"$SID\"}"
+    ;;
+
   wal-status)
     bash "$SCRIPT_DIR/bin/graph-wal.sh" status
     ;;
 
   *)
-    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","wal-status"]}'
+    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","wal-status"]}'
     exit 1
     ;;
 

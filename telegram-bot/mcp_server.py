@@ -517,13 +517,13 @@ RETURN proj.name AS project, proj.domain AS domain, w.role AS role
 // My recent sessions
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
 RETURN s.date AS date, s.topic AS topic, s.summary AS summary
-ORDER BY s.date DESC LIMIT 5
+ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
 
 // Team activity (others, last 7 days)
 MATCH (s:Session)-[:BY]->(p:Person)
 WHERE p.name <> $me AND date(s.date) >= date() - duration('P7D')
 RETURN s.date AS date, s.topic AS topic, p.name AS by
-ORDER BY s.date DESC LIMIT 5
+ORDER BY date(left(toString(s.date), 10)) DESC LIMIT 5
 
 // Active quests
 MATCH (q:Quest {status: 'active'})-[:RELATES_TO]->(proj:Project)

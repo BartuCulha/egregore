@@ -28,7 +28,7 @@ async def _my_sessions(org: dict, me: str, time_range: str) -> dict:
                s.status AS status, s.summary AS summary, s.startedAt AS startedAt,
                s.wrappedAt AS wrappedAt, target.name AS handedTo,
                collect(DISTINCT q.id) AS quests
-        ORDER BY s.date DESC, s.startedAt DESC LIMIT 20
+        ORDER BY date(left(toString(s.date), 10)) DESC, s.startedAt DESC LIMIT 20
     """, {"me": me, "timeRange": time_range})
 
 
@@ -86,7 +86,7 @@ async def _open_threads(org: dict, me: str) -> dict:
               AND size(s.openThreads) > 0
         RETURN s.id AS sessionId, s.topic AS topic, s.date AS date,
                s.branch AS branch, s.openThreads AS threads
-        ORDER BY s.date DESC, s.wrappedAt DESC LIMIT 3
+        ORDER BY date(left(toString(s.date), 10)) DESC, s.wrappedAt DESC LIMIT 3
     """, {"me": me})
 
 
