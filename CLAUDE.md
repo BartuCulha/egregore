@@ -245,7 +245,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
-**Git** — `/branch` `/commit` `/push` `/pr` `/save`
+**Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation** — when intent is ambiguous between similar commands:
@@ -258,6 +258,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Connectors: `/connect google` (enable/auth) vs `/ingest google` (bring content in) — "connect google" = setup, "import from drive" = ingest
 - Identity: `/me` (view profile or set display name) — "who am I", "call me oz", "change my name"
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
+- PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
 
 ## Socratic Questioning (MANDATORY)
 
