@@ -47,6 +47,18 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 
 Then proceed with their request.
 
+### Handoff claiming
+
+If the session context includes `addressed_to_user` handoffs and the user says they're working on one of them (e.g. "I'm picking up the google-connector handoff"), create the IMPLEMENTS link immediately after branch creation:
+
+```bash
+bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
+```
+
+Where `$HANDOFF_SESSION_ID` is the session ID of the handoff being claimed (query the graph if needed: `MATCH (s:Session)-[:HANDED_TO]->(p:Person {github: $gh}) WHERE s.handoffStatus IN ['pending','read'] AND s.topic CONTAINS $keyword RETURN s.id`).
+
+This creates `(:Session)-[:IMPLEMENTS]->(:Session)`. When the session wraps, `/wrap` checks for this link and notifies the handoff author.
+
 **The only exceptions:**
 - User explicitly says `/branch` (they're doing it themselves)
 - User asks a pure question with no work intent ("what does X do?", "how does Y work?")
@@ -100,7 +112,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
 
 ## Notifications
 
