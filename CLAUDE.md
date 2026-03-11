@@ -112,7 +112,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
 
 ## Notifications
 
@@ -246,6 +246,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
+**Spirits** — `/summon` (design + launch persistent agent processes — recurring loops or watchdogs)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation** — when intent is ambiguous between similar commands:
@@ -259,6 +260,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Identity: `/me` (view profile or set display name) — "who am I", "call me oz", "change my name"
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
 - PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
+- Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop
 
 ## Socratic Questioning (MANDATORY)
 
