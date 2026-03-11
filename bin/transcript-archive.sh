@@ -98,8 +98,9 @@ if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
 
   bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$ACTIVITY_CYPHER" "$ACTIVITY_PARAMS" 2>/dev/null || true
 
-  # Clean up buffer
+  # Clean up buffer and compact sequence counter
   rm -f "$OBS_BUFFER"
+  rm -f "/tmp/egregore-compact-seq-${SESSION_ID}" 2>/dev/null
 fi
 
 # --- Emit session_end telemetry + flush buffer (background, non-blocking) ---

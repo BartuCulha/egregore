@@ -38,7 +38,7 @@ fi
 # --- Extract file path based on tool type ---
 PATH_VALUE=""
 case "$TOOL" in
-  Edit|Write|Read)
+  Edit|Write)
     PATH_VALUE=$(echo "$INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:.*"\([^"]*\)"/\1/')
     ;;
   NotebookEdit)
