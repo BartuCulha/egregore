@@ -106,24 +106,48 @@ CODER_FIRST_USER_TRIAL=false
 CODER_TELEMETRY_ENABLE=false
 CODERENV
 
-# GitHub OAuth — always enabled, uses dedicated Coder OAuth app
-# NOTE: Client ID/Secret are placeholders from env — each VPS needs its own
-# OAuth app with IP-specific callback URL. After provisioning, update these
-# via /hosting enable flow (Step 5) or SSH into the VPS.
-cat >> /etc/coder.d/coder.env <<OAUTHENV
-CODER_OAUTH2_GITHUB_CLIENT_ID={os.environ.get("CODER_GITHUB_CLIENT_ID", "")}
-CODER_OAUTH2_GITHUB_CLIENT_SECRET={os.environ.get("CODER_GITHUB_CLIENT_SECRET", "")}
-CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS=true
-CODER_OAUTH2_GITHUB_ALLOWED_ORGS={github_org}
-OAUTHENV
+# No per-VPS OAuth apps needed — auth is handled via API-generated session tokens.
+# The auth redirect service (port 3200) sets the coder_session_token cookie.
 
-# GitHub External Auth — required for workspaces to clone private repos
-cat >> /etc/coder.d/coder.env <<EXTAUTHENV
-CODER_EXTERNAL_AUTH_0_TYPE=github
-CODER_EXTERNAL_AUTH_0_ID=github
-CODER_EXTERNAL_AUTH_0_CLIENT_ID={os.environ.get("CODER_GITHUB_CLIENT_ID", "")}
-CODER_EXTERNAL_AUTH_0_CLIENT_SECRET={os.environ.get("CODER_GITHUB_CLIENT_SECRET", "")}
-EXTAUTHENV
+# ─── Auth redirect service ───────────────────────────────────────
+cat > /opt/coder-auth-redirect.py <<'AUTHPY'
+#!/usr/bin/env python3
+"""Sets coder_session_token cookie then redirects to terminal. No OAuth needed."""
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+class AuthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        q = parse_qs(urlparse(self.path).query)
+        token = q.get("token", [""])[0]
+        redirect = q.get("redirect", ["/"])[0]
+        if not token:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Missing token")
+            return
+        self.send_response(302)
+        self.send_header("Location", redirect)
+        self.send_header("Set-Cookie", f"coder_session_token={{token}}; Path=/; HttpOnly; SameSite=Lax")
+        self.end_headers()
+    def log_message(self, *args): pass
+
+HTTPServer(("0.0.0.0", 3200), AuthHandler).serve_forever()
+AUTHPY
+chmod +x /opt/coder-auth-redirect.py
+
+cat > /etc/systemd/system/coder-auth.service <<'AUTHSVC'
+[Unit]
+Description=Coder Auth Redirect
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 /opt/coder-auth-redirect.py
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+AUTHSVC
+systemctl enable --now coder-auth.service
 
 # ─── Start Coder ─────────────────────────────────────────────────
 systemctl enable coder
