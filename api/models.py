@@ -94,6 +94,7 @@ class OrgInvite(BaseModel):
     github_username: str
     repo_name: str = "egregore-core"
     slug: str = ""  # Egregore slug — required when multiple orgs share a GitHub org
+    github_token: str = ""  # GitHub token for org operations (when API key is in auth header)
 
 
 class OrgAcceptInvite(BaseModel):
