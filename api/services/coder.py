@@ -142,7 +142,7 @@ class CoderClient:
         org_slug: str = "",
         org_name: str = "",
         github_org: str = "",
-        repo_name: str = "egregore-core",
+        repo_name: str = "",
         managed_repos: str = "",
     ) -> dict:
         """Create a workspace for a user and start it.

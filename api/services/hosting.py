@@ -112,7 +112,7 @@ CODERENV
 # ─── Auth redirect service ───────────────────────────────────────
 cat > /opt/coder-auth-redirect.py <<'AUTHPY'
 #!/usr/bin/env python3
-"""Sets coder_session_token cookie then redirects to terminal. No OAuth needed."""
+# Sets coder_session_token cookie then redirects to terminal. No OAuth needed.
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 

@@ -929,7 +929,7 @@ class TestJoinFlow:
                    return_value=("", "")):
             resp = app_client.post(
                 "/api/org/join",
-                json={"github_org": ACME_GH_ORG},
+                json={"github_org": ACME_GH_ORG, "repo_name": "egregore-core"},
                 headers={"Authorization": f"Bearer {JOINER_TOKEN}"},
             )
 
@@ -965,7 +965,7 @@ class TestJoinFlow:
 
         resp = app_client.post(
             "/api/org/join",
-            json={"github_org": ACME_GH_ORG},
+            json={"github_org": ACME_GH_ORG, "repo_name": "egregore-core"},
             headers={"Authorization": f"Bearer {JOINER_TOKEN}"},
         )
         assert resp.status_code == 400

@@ -34,7 +34,8 @@ API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
 GITHUB_ORG=$(jq -r ".github_org" egregore.json)
 API_URL=$(jq -r ".api_url" egregore.json)
 ORG_NAME=$(jq -r ".org_name" egregore.json)
-REPO_NAME=$(jq -r ".repo_name // \"egregore-core\"" egregore.json)
+REPO_NAME=$(jq -r ".repo_name // empty" egregore.json)
+if [ -z "$REPO_NAME" ]; then echo "ERROR: repo_name not set in egregore.json"; exit 1; fi
 SLUG=$(jq -r ".slug" egregore.json)
 
 if [ -z "$GH_TOKEN" ]; then
