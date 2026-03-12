@@ -34,6 +34,7 @@ GITHUB_ORG=$(jq -r ".github_org" egregore.json)
 API_URL=$(jq -r ".api_url" egregore.json)
 ORG_NAME=$(jq -r ".org_name" egregore.json)
 REPO_NAME=$(jq -r ".repo_name // \"egregore-core\"" egregore.json)
+SLUG=$(jq -r ".slug" egregore.json)
 
 if [ -z "$TOKEN" ]; then
   echo "ERROR: No GitHub token found. Run: bash bin/github-auth.sh"
@@ -43,7 +44,7 @@ fi
 RESP=$(curl -s -X POST "$API_URL/api/org/invite" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d "{\"github_org\": \"$GITHUB_ORG\", \"github_username\": \"$USERNAME\", \"repo_name\": \"$REPO_NAME\"}")
+  -d "{\"github_org\": \"$GITHUB_ORG\", \"github_username\": \"$USERNAME\", \"repo_name\": \"$REPO_NAME\", \"slug\": \"$SLUG\"}")
 
 # Output structured JSON for parsing
 echo "$RESP" | jq -c "{

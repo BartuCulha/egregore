@@ -93,6 +93,7 @@ class OrgInvite(BaseModel):
     github_org: str
     github_username: str
     repo_name: str = "egregore-core"
+    slug: str = ""  # Egregore slug — required when multiple orgs share a GitHub org
 
 
 class OrgAcceptInvite(BaseModel):
