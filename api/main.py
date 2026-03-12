@@ -1670,18 +1670,22 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
 
     # Resolve org config from server-side sources (not from repo's egregore.json)
     org_name = owner
-    slug = None
+    slug = body.slug or None  # Use caller-provided slug if available
     repos = []
     memory_repo = f"{owner}-memory"
 
-    # 1. Check ORG_CONFIGS (in-memory, loaded from env + Supabase on startup)
-    for cfg_slug, cfg in ORG_CONFIGS.items():
-        if cfg.get("github_org", "").lower() == owner.lower():
-            slug = cfg_slug
-            org_name = cfg.get("org_name", owner)
-            break
+    # 1. If slug provided, look it up directly in ORG_CONFIGS
+    if slug and slug in ORG_CONFIGS:
+        org_name = ORG_CONFIGS[slug].get("org_name", owner)
+    elif not slug:
+        # 1b. No slug — match by github_org (ambiguous if multiple orgs share one GitHub org)
+        for cfg_slug, cfg in ORG_CONFIGS.items():
+            if cfg.get("github_org", "").lower() == owner.lower():
+                slug = cfg_slug
+                org_name = cfg.get("org_name", owner)
+                break
 
-    # 2. Fall back to Supabase lookup by github_org
+    # 2. Fall back to Supabase lookup
     if not slug and USE_SUPABASE:
         try:
             from .services.supabase import get_client
