@@ -1,6 +1,7 @@
 """Tests for the invitation lifecycle.
 
-Admin invite, non-admin blocked, peek info, accept, consume, and edge cases.
+Admin invite, non-admin blocked, peek info, accept, consume, edge cases,
+and multi-org slug isolation (cross-tenant safety).
 All GitHub/Neo4j calls mocked with respx.
 """
 
@@ -23,6 +24,9 @@ GITHUB_API = "https://api.github.com"
 ADMIN_TOKEN = "ghp_admin_token"
 MEMBER_TOKEN = "ghp_member_token"
 INVITEE_TOKEN = "ghp_invitee_token"
+
+# Shared GitHub org — two Egregore instances under one org
+SHARED_GH_ORG = "SharedOrg"
 
 
 @pytest.fixture(autouse=True)
@@ -77,8 +81,8 @@ def _mock_admin_github():
     respx.get(f"{GITHUB_API}/repos/AlphaOrg/egregore-core/contents/egregore.json").mock(
         return_value=Response(200, json=_egregore_json_content())
     )
-    # Add collaborator to memory repo
-    respx.put(f"{GITHUB_API}/repos/AlphaOrg/AlphaOrg-memory/collaborators/invitee").mock(
+    # Add collaborator to egregore repo + memory repo
+    respx.put(url__regex=rf"{GITHUB_API}/repos/AlphaOrg/.*/collaborators/invitee").mock(
         return_value=Response(204)
     )
 
@@ -356,3 +360,221 @@ class TestInviteAccept:
             headers={"Authorization": f"Bearer {INVITEE_TOKEN}"},
         )
         assert resp.status_code == 404
+
+
+# =============================================================================
+# MULTI-ORG SLUG ISOLATION
+# Regression guard: two Egregore instances sharing one GitHub org must never
+# mix up slugs, Telegram groups, or VPS routing.
+# =============================================================================
+
+
+# Two orgs under the same GitHub org — the exact scenario that broke in production
+INSTANCE_A_SLUG = "instance-a"
+INSTANCE_A_API_KEY = "ek_instance-a_secretaaa111"
+INSTANCE_A_CONFIG = {
+    "api_key": INSTANCE_A_API_KEY,
+    "org_name": "Instance A",
+    "github_org": SHARED_GH_ORG,
+    "neo4j_host": "neo4j-a.example.com",
+    "neo4j_user": "neo4j",
+    "neo4j_password": "testpass",
+    "telegram_bot_token": "111111:AAA",
+    "telegram_chat_id": "-100aaa",
+    "slug": "instance-a",
+}
+
+INSTANCE_B_SLUG = "instance-b"
+INSTANCE_B_API_KEY = "ek_instance-b_secretbbb222"
+INSTANCE_B_CONFIG = {
+    "api_key": INSTANCE_B_API_KEY,
+    "org_name": "Instance B",
+    "github_org": SHARED_GH_ORG,
+    "neo4j_host": "neo4j-b.example.com",
+    "neo4j_user": "neo4j",
+    "neo4j_password": "testpass",
+    "telegram_bot_token": "222222:BBB",
+    "telegram_chat_id": "-100bbb",
+    "slug": "instance-b",
+}
+
+
+def _mock_admin_github_shared_org(slug="instance-b", org_name="Instance B"):
+    """Set up respx mocks for an admin inviting under the shared org."""
+    respx.get(f"{GITHUB_API}/user").mock(
+        return_value=Response(200, json={"login": "admin", "name": "Admin User"})
+    )
+    respx.get(f"{GITHUB_API}/repos/{SHARED_GH_ORG}/egregore-core").mock(
+        return_value=Response(200, json={"full_name": f"{SHARED_GH_ORG}/egregore-core"})
+    )
+    respx.get(f"{GITHUB_API}/orgs/{SHARED_GH_ORG}").mock(
+        return_value=Response(200, json={"login": SHARED_GH_ORG})
+    )
+    respx.get(f"{GITHUB_API}/user/memberships/orgs/{SHARED_GH_ORG}").mock(
+        return_value=Response(200, json={"role": "admin"})
+    )
+    respx.put(f"{GITHUB_API}/orgs/{SHARED_GH_ORG}/memberships/invitee").mock(
+        return_value=Response(200, json={"state": "pending"})
+    )
+    # egregore.json readable (for repos + memory_repo config)
+    respx.get(f"{GITHUB_API}/repos/{SHARED_GH_ORG}/egregore-core/contents/egregore.json").mock(
+        return_value=Response(200, json=_egregore_json_content(
+            org_name=org_name, github_org=SHARED_GH_ORG, slug=slug,
+        ))
+    )
+    # Collaborator additions
+    respx.put(url__regex=rf"{GITHUB_API}/repos/{SHARED_GH_ORG}/.*/collaborators/invitee").mock(
+        return_value=Response(204)
+    )
+
+
+@pytest.mark.isolation
+@pytest.mark.flow
+class TestMultiOrgSlugIsolation:
+    """Two Egregore instances sharing one GitHub org must resolve to the correct slug.
+
+    This is the regression that hit production: commit 70bb2bd changed slug
+    resolution to iterate ORG_CONFIGS and take the first match for github_org.
+    With two instances under Curve-Labs, it always returned 'curvelabs'
+    instead of 'egregore-0'.
+    """
+
+    @respx.mock
+    def test_api_key_resolves_correct_slug(self, app_client, _patch_org_configs):
+        """API key ek_instance-b_xxx resolves to instance-b, not instance-a."""
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+        _patch_org_configs[INSTANCE_B_SLUG] = {**INSTANCE_B_CONFIG}
+        _mock_admin_github_shared_org()
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                "github_token": ADMIN_TOKEN,
+            },
+            headers={"Authorization": f"Bearer {INSTANCE_B_API_KEY}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["org_name"] == "Instance B"
+
+        # Verify the invite token carries the correct slug
+        from api.services.tokens import peek_token
+        invite_data = peek_token(data["invite_token"])
+        assert invite_data["slug"] == "instance-b"
+
+    @respx.mock
+    def test_api_key_a_resolves_to_a_not_b(self, app_client, _patch_org_configs):
+        """API key ek_instance-a_xxx resolves to instance-a."""
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+        _patch_org_configs[INSTANCE_B_SLUG] = {**INSTANCE_B_CONFIG}
+        _mock_admin_github_shared_org(slug="instance-a", org_name="Instance A")
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                "github_token": ADMIN_TOKEN,
+            },
+            headers={"Authorization": f"Bearer {INSTANCE_A_API_KEY}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["org_name"] == "Instance A"
+
+        from api.services.tokens import peek_token
+        invite_data = peek_token(data["invite_token"])
+        assert invite_data["slug"] == "instance-a"
+
+    @respx.mock
+    def test_invalid_api_key_rejected(self, app_client, _patch_org_configs):
+        """API key with wrong secret is rejected."""
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                "github_token": ADMIN_TOKEN,
+            },
+            headers={"Authorization": "Bearer ek_instance-a_wrongsecret"},
+        )
+
+        assert resp.status_code == 401
+
+    @respx.mock
+    def test_api_key_without_github_token_rejected(self, app_client, _patch_org_configs):
+        """API key auth without github_token in body → 400."""
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                # no github_token
+            },
+            headers={"Authorization": f"Bearer {INSTANCE_A_API_KEY}"},
+        )
+
+        assert resp.status_code == 400
+        assert "github_token" in resp.json()["detail"]
+
+    @respx.mock
+    def test_legacy_github_token_ambiguous_org_returns_400(self, app_client, _patch_org_configs):
+        """Legacy auth (GitHub token) with ambiguous github_org and no slug → 400.
+
+        This is the exact scenario that silently returned the wrong org before.
+        Now it must fail explicitly rather than guess.
+        """
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+        _patch_org_configs[INSTANCE_B_SLUG] = {**INSTANCE_B_CONFIG}
+
+        _mock_admin_github_shared_org()
+        # No egregore.json readable (repo doesn't have it or 404)
+        respx.get(f"{GITHUB_API}/repos/{SHARED_GH_ORG}/egregore-core/contents/egregore.json").mock(
+            return_value=Response(404)
+        )
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                # No slug, no api_key — ambiguous
+            },
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
+        assert resp.status_code == 400
+        assert "slug" in resp.json()["detail"].lower()
+
+    @respx.mock
+    def test_legacy_auth_with_explicit_slug_works(self, app_client, _patch_org_configs):
+        """Legacy auth with explicit slug in body resolves correctly."""
+        _patch_org_configs[INSTANCE_A_SLUG] = {**INSTANCE_A_CONFIG}
+        _patch_org_configs[INSTANCE_B_SLUG] = {**INSTANCE_B_CONFIG}
+        _mock_admin_github_shared_org()
+
+        resp = app_client.post(
+            "/api/org/invite",
+            json={
+                "github_org": SHARED_GH_ORG,
+                "github_username": "invitee",
+                "slug": "instance-b",
+            },
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["org_name"] == "Instance B"
+
+        from api.services.tokens import peek_token
+        invite_data = peek_token(data["invite_token"])
+        assert invite_data["slug"] == "instance-b"

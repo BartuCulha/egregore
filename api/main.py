@@ -1628,10 +1628,53 @@ async def user_profile_update(body: UserProfileUpdate, authorization: str = Head
 async def org_invite(body: OrgInvite, authorization: str = Header(...)):
     """Invite a GitHub user to an org's Egregore.
 
+    Auth modes:
+    - API key in header (preferred): Authorization: Bearer ek_<slug>_<secret>
+      GitHub token passed in body.github_token for org operations.
+    - GitHub token in header (legacy): Authorization: Bearer ghp_<token>
+      Falls back to slug resolution cascade.
+
     The inviter must be an admin of the GitHub org.
     Sends a GitHub org invitation + creates an Egregore invite link.
     """
-    token = authorization.replace("Bearer ", "").strip()
+    auth_value = authorization.replace("Bearer ", "").strip()
+
+    # Determine auth mode: API key (ek_) or legacy GitHub token (ghp_ / gho_ / github_pat_)
+    if auth_value.startswith("ek_"):
+        # New path: API key identifies the Egregore instance
+        from .auth import get_org_slug
+        slug = get_org_slug(auth_value)
+
+        # Validate the API key is real
+        org_config = ORG_CONFIGS.get(slug)
+        if not org_config or not secrets.compare_digest(org_config.get("api_key", ""), auth_value):
+            # Try Supabase validation
+            if USE_SUPABASE:
+                try:
+                    from .services.supabase import validate_api_key as sb_validate
+                    org_row = sb_validate(auth_value)
+                    if not org_row:
+                        raise HTTPException(status_code=401, detail="Invalid API key")
+                    org_name = org_row.get("name", body.github_org)
+                except Exception:
+                    raise HTTPException(status_code=401, detail="Invalid API key")
+            else:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+        else:
+            org_name = org_config.get("org_name", body.github_org)
+
+        # GitHub token must be in the body
+        token = body.github_token
+        if not token:
+            raise HTTPException(
+                status_code=400,
+                detail="github_token required in body when using API key auth",
+            )
+    else:
+        # Legacy path: GitHub token in header, slug resolved via cascade
+        token = auth_value
+        slug = None
+        org_name = body.github_org
 
     try:
         inviter = await gh.get_user(token)
@@ -1668,43 +1711,44 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
         logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{body.repo_name}")
         github_result = {"status": "collaborator_failed", "reason": "Check token scopes (needs 'repo')"}
 
-    # Resolve org config from server-side sources (not from repo's egregore.json)
-    org_name = owner
-    slug = body.slug or None  # Use caller-provided slug if available
+    # --- Slug resolution (only needed for legacy auth path) ---
+    config = {}
     repos = []
     memory_repo = f"{owner}-memory"
 
-    # 1. If slug provided, look it up directly in ORG_CONFIGS
-    if slug and slug in ORG_CONFIGS:
-        org_name = ORG_CONFIGS[slug].get("org_name", owner)
-    elif not slug:
-        # 1b. No slug — match by github_org (ambiguous if multiple orgs share one GitHub org)
-        for cfg_slug, cfg in ORG_CONFIGS.items():
-            if cfg.get("github_org", "").lower() == owner.lower():
-                slug = cfg_slug
-                org_name = cfg.get("org_name", owner)
-                break
-
-    # 2. Fall back to Supabase lookup
-    if not slug and USE_SUPABASE:
-        try:
-            from .services.supabase import get_client
-            result = get_client().table("orgs").select("slug, name, github_org").eq("github_org", owner).limit(1).execute()
-            if result.data:
-                row = result.data[0]
-                slug = row["slug"]
-                org_name = row.get("name", owner)
-        except Exception as e:
-            logger.warning(f"Supabase org lookup failed for {owner}: {e}")
-
-    # 3. Last resort: read egregore.json from the repo (original behavior)
-    config = {}
     if not slug:
-        config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
-        if config_raw:
-            config = json.loads(config_raw)
-            org_name = config.get("org_name", owner)
-            slug = config.get("slug")
+        slug = body.slug or None
+
+        # 1. If slug provided, look it up directly
+        if slug and slug in ORG_CONFIGS:
+            org_name = ORG_CONFIGS[slug].get("org_name", owner)
+        elif not slug:
+            # 1b. No slug — try matching by github_org, but ONLY if unambiguous.
+            matching = [(s, c) for s, c in ORG_CONFIGS.items()
+                         if c.get("github_org", "").lower() == owner.lower()]
+            if len(matching) == 1:
+                slug = matching[0][0]
+                org_name = matching[0][1].get("org_name", owner)
+
+        # 2. Read egregore.json from the repo
+        if not slug:
+            config_raw = await gh.get_file_content(token, owner, body.repo_name, "egregore.json")
+            if config_raw:
+                config = json.loads(config_raw)
+                org_name = config.get("org_name", owner)
+                slug = config.get("slug")
+
+        # 3. Fall back to Supabase lookup
+        if not slug and USE_SUPABASE:
+            try:
+                from .services.supabase import get_client
+                result = get_client().table("orgs").select("slug, name, github_org").eq("github_org", owner).execute()
+                if result.data and len(result.data) == 1:
+                    row = result.data[0]
+                    slug = row["slug"]
+                    org_name = row.get("name", owner)
+            except Exception as e:
+                logger.warning(f"Supabase org lookup failed for {owner}: {e}")
 
     if not slug:
         raise HTTPException(
