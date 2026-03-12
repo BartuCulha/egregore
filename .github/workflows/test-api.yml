@@ -1,0 +1,38 @@
+name: API Tests
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'api/**'
+      - 'tests/**'
+      - '.github/workflows/test-api.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'api/**'
+      - 'tests/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest respx pytest-html pytest-asyncio pytest-metadata
+
+      - name: Run API tests
+        run: |
+          cd tests
+          python -m pytest test_invite_flow.py -v --tb=short -m "api or isolation or flow"
