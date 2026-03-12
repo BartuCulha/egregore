@@ -35,4 +35,4 @@ jobs:
       - name: Run API tests
         run: |
           cd tests
-          python -m pytest test_invite_flow.py -v --tb=short -m "api or isolation or flow"
+          python -m pytest test_invite_flow.py test_self_serve.py -v --tb=short -m "api or isolation or flow"
