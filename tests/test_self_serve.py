@@ -800,6 +800,19 @@ class TestCoderClientOrgIds:
 # =============================================================================
 
 
+def _mock_supabase_client(select_data, update_data=None):
+    """Create a mock Supabase client that returns select_data on .table().select().eq().execute()."""
+    mock_client = MagicMock()
+    select_result = MagicMock()
+    select_result.data = select_data
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = select_result
+    if update_data is not None:
+        update_result = MagicMock()
+        update_result.data = update_data
+        mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = update_result
+    return mock_client
+
+
 class TestCoderCredentialAutoFetch:
     """_get_coder_credentials must auto-fetch token from Coder when missing in Supabase."""
 
@@ -807,46 +820,39 @@ class TestCoderCredentialAutoFetch:
     @pytest.mark.asyncio
     async def test_auto_fetches_token_when_missing(self):
         """If hosting_coder_token is null but password exists, fetch + store."""
-        from api.services.supabase import get_client as _real_get_client
-
-        # Mock Coder login
-        respx.post(url__regex=r"http://10\.0\.0\.1/api/v2/users/login").mock(
-            return_value=Response(201, json={"session_token": "fresh-token"})
-        )
-        # Mock Supabase REST API (select + update)
-        respx.get(url__regex=r".*supabase.*orgs.*slug=eq.test-slug.*").mock(
-            return_value=Response(200, json=[{
+        mock_client = _mock_supabase_client(
+            select_data=[{
                 "hosting_coder_url": CODER_URL,
                 "hosting_coder_token": None,
                 "hosting_coder_password": CODER_PASSWORD,
                 "hosting_ip": "10.0.0.1",
-            }])
-        )
-        respx.patch(url__regex=r".*supabase.*orgs.*slug=eq.test-slug.*").mock(
-            return_value=Response(200, json=[{}])
+            }],
+            update_data=[{}],
         )
 
-        with patch("api.main.USE_SUPABASE", True):
+        with patch("api.main.USE_SUPABASE", True), \
+             patch("api.services.supabase.get_client", return_value=mock_client), \
+             patch("api.services.hosting.get_coder_session_token", new_callable=AsyncMock, return_value="fresh-token"):
             from api.main import _get_coder_credentials
             url, token = await _get_coder_credentials("test-slug")
 
         assert url == CODER_URL
         assert token == "fresh-token"
 
-    @respx.mock
     @pytest.mark.asyncio
     async def test_returns_existing_token_when_present(self):
         """If token already exists in Supabase, return it without fetching."""
-        respx.get(url__regex=r".*supabase.*orgs.*slug=eq.test-slug.*").mock(
-            return_value=Response(200, json=[{
+        mock_client = _mock_supabase_client(
+            select_data=[{
                 "hosting_coder_url": CODER_URL,
                 "hosting_coder_token": "existing-token",
                 "hosting_coder_password": CODER_PASSWORD,
                 "hosting_ip": "10.0.0.1",
-            }])
+            }],
         )
 
-        with patch("api.main.USE_SUPABASE", True):
+        with patch("api.main.USE_SUPABASE", True), \
+             patch("api.services.supabase.get_client", return_value=mock_client):
             from api.main import _get_coder_credentials
             url, token = await _get_coder_credentials("test-slug")
 
@@ -862,20 +868,20 @@ class TestCoderCredentialAutoFetch:
         assert url == ""
         assert token == ""
 
-    @respx.mock
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_password(self):
         """If no password stored (old provisioning), can't auto-fetch."""
-        respx.get(url__regex=r".*supabase.*orgs.*slug=eq.test-slug.*").mock(
-            return_value=Response(200, json=[{
+        mock_client = _mock_supabase_client(
+            select_data=[{
                 "hosting_coder_url": CODER_URL,
                 "hosting_coder_token": None,
                 "hosting_coder_password": None,
                 "hosting_ip": "10.0.0.1",
-            }])
+            }],
         )
 
-        with patch("api.main.USE_SUPABASE", True):
+        with patch("api.main.USE_SUPABASE", True), \
+             patch("api.services.supabase.get_client", return_value=mock_client):
             from api.main import _get_coder_credentials
             url, token = await _get_coder_credentials("test-slug")
 
@@ -1210,34 +1216,37 @@ class TestDeprovision:
             return_value=Response(200, json={"login": "oguzhan", "name": "Oz"})
         )
 
-        # Track what gets passed to Supabase PATCH (update)
-        captured_patch_body = {}
+        # Track what gets passed to Supabase update()
+        captured_update_body = {}
+        mock_client = MagicMock()
+        update_result = MagicMock()
+        update_result.data = [{}]
 
-        def _capture_supabase_patch(request):
-            import json as _json
-            captured_patch_body.update(_json.loads(request.content))
-            return Response(200, json=[{}])
+        def _capture_update(fields):
+            captured_update_body.update(fields)
+            chain = MagicMock()
+            chain.eq.return_value.execute.return_value = update_result
+            return chain
 
-        respx.patch(url__regex=r".*supabase.*orgs.*slug=eq.acme.*").mock(
-            side_effect=_capture_supabase_patch
-        )
+        mock_client.table.return_value.update.side_effect = _capture_update
 
         monkeypatch.setattr(_main_mod, "USE_SUPABASE", True)
         monkeypatch.setattr(_main_mod, "ADMIN_USERS", ["oguzhan"])
 
         with patch("api.services.hosting.deprovision_vps", new_callable=AsyncMock,
-                   return_value={"status": "deleted"}):
+                   return_value={"status": "deleted"}), \
+             patch("api.services.supabase.get_client", return_value=mock_client):
             resp = app_client.delete(
                 f"/api/hosting/deprovision/{ACME_SLUG}",
                 headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
             )
 
         # Verify sensitive fields are cleared
-        assert "hosting_coder_token" in captured_patch_body
-        assert captured_patch_body["hosting_coder_token"] is None
-        assert "hosting_coder_password" in captured_patch_body
-        assert captured_patch_body["hosting_coder_password"] is None
-        assert captured_patch_body["hosting_enabled"] is False
+        assert "hosting_coder_token" in captured_update_body
+        assert captured_update_body["hosting_coder_token"] is None
+        assert "hosting_coder_password" in captured_update_body
+        assert captured_update_body["hosting_coder_password"] is None
+        assert captured_update_body["hosting_enabled"] is False
 
 
 # =============================================================================
