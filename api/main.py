@@ -4244,8 +4244,14 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
     if not session_token:
         raise HTTPException(status_code=503, detail="Could not generate workspace session")
 
+    terminal_url = f"{coder_url}/@{coder_username}/egregore.main/terminal"
+
+    # Build auth redirect URL — tiny service on VPS port 3200 sets the cookie and redirects
+    from urllib.parse import urlencode
+    auth_url = f"{coder_url}:3200/auth?{urlencode({'token': session_token, 'redirect': terminal_url})}"
+
     return {
-        "url": f"{coder_url}/@{coder_username}/egregore.main/terminal",
+        "url": auth_url,
         "session_token": session_token,
         "coder_url": coder_url,
     }
@@ -4324,10 +4330,24 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
 
     terminal_url = f"{coder_url}/@{coder_username}/egregore.main/terminal"
 
+    # Generate short-lived session token so user doesn't need Coder OAuth
+    session_token = ""
+    try:
+        session_token = await coder_client.create_user_token(coder_username, lifetime_seconds=600)
+    except Exception as e:
+        logger.warning(f"Failed to create Coder session token for {coder_username}: {e}")
+
+    # Build auth redirect URL — tiny service on VPS port 3200 sets the cookie and redirects
+    auth_url = ""
+    if session_token:
+        from urllib.parse import urlencode
+        auth_url = f"{coder_url}:3200/auth?{urlencode({'token': session_token, 'redirect': terminal_url})}"
+
     return {
         "status": ws_result.get("status", "error"),
-        "terminal_url": terminal_url,
+        "terminal_url": auth_url or terminal_url,
         "coder_url": coder_url,
+        "session_token": session_token,
     }
 
 
