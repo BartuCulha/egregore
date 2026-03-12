@@ -1670,18 +1670,22 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
 
     # Resolve org config from server-side sources (not from repo's egregore.json)
     org_name = owner
-    slug = None
+    slug = body.slug or None  # Use caller-provided slug if available
     repos = []
     memory_repo = f"{owner}-memory"
 
-    # 1. Check ORG_CONFIGS (in-memory, loaded from env + Supabase on startup)
-    for cfg_slug, cfg in ORG_CONFIGS.items():
-        if cfg.get("github_org", "").lower() == owner.lower():
-            slug = cfg_slug
-            org_name = cfg.get("org_name", owner)
-            break
+    # 1. If slug provided, look it up directly in ORG_CONFIGS
+    if slug and slug in ORG_CONFIGS:
+        org_name = ORG_CONFIGS[slug].get("org_name", owner)
+    elif not slug:
+        # 1b. No slug — match by github_org (ambiguous if multiple orgs share one GitHub org)
+        for cfg_slug, cfg in ORG_CONFIGS.items():
+            if cfg.get("github_org", "").lower() == owner.lower():
+                slug = cfg_slug
+                org_name = cfg.get("org_name", owner)
+                break
 
-    # 2. Fall back to Supabase lookup by github_org
+    # 2. Fall back to Supabase lookup
     if not slug and USE_SUPABASE:
         try:
             from .services.supabase import get_client
@@ -3969,6 +3973,28 @@ async def hosting_status(slug: str, authorization: str = Header(...)):
             logger.warning(f"Failed to auto-store Coder token for {slug}: {e}")
 
     return result
+
+
+@app.get("/api/hosting/credentials/{slug}")
+async def hosting_credentials(slug: str, admin_user: str = Depends(validate_admin_github_token)):
+    """Get VPS credentials for an org. Admin only. Used for SSH access."""
+    if not USE_SUPABASE:
+        raise HTTPException(status_code=501, detail="Requires Supabase")
+
+    from .services import supabase as sb
+    rows = sb.get_client().table("orgs").select(
+        "hosting_ip, hosting_coder_password, hosting_coder_url"
+    ).eq("slug", slug).execute()
+    if not rows.data:
+        raise HTTPException(status_code=404, detail="Org not found")
+
+    ip = rows.data[0].get("hosting_ip", "")
+    password = rows.data[0].get("hosting_coder_password", "")
+    if not ip or not password:
+        raise HTTPException(status_code=404, detail="No hosted VPS or missing credentials")
+
+    logger.info(f"Admin {admin_user} retrieved VPS credentials for {slug}")
+    return {"ip": ip, "password": password, "coder_url": rows.data[0].get("hosting_coder_url", "")}
 
 
 @app.delete("/api/hosting/deprovision/{slug}")
