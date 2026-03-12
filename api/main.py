@@ -591,6 +591,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
     }
 
     # 6. Persist org — Supabase first (if enabled), then Neo4j, then in-memory
+    managed_repos_str = ",".join(body.repos) if body.repos else ""
     if USE_SUPABASE:
         try:
             from .services import supabase as sb
@@ -601,6 +602,8 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 telegram_chat_id=body.telegram_chat_id,
                 created_by=user["login"],
                 transcript_sharing=body.transcript_sharing,
+                repo_name=repo_name,
+                managed_repos=managed_repos_str,
             )
             sb.revoke_api_key(slug)  # Idempotent: revoke any old keys before creating new
             sb.create_api_key(slug, api_key)
@@ -693,7 +696,6 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
         try:
             from .services.hosting import provision_vps
 
-            managed_repos = ",".join(body.repos) if body.repos else ""
             vps_result = await provision_vps(
                 org_slug=slug,
                 org_name=body.org_name,
@@ -703,7 +705,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
                 memory_url=memory_url,
                 api_url=api_url,
                 egregore_api_key=api_key,
-                managed_repos=managed_repos,
+                managed_repos=managed_repos_str,
                 server_type=body.server_type,
                 github_token=token,
             )
@@ -840,7 +842,7 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
                             org_slug=slug,
                             org_name=org_data.get("name", slug),
                             github_org=org_data.get("github_org", ""),
-                            repo_name=org_data.get("repo_name", "egregore-core"),
+                            repo_name=org_data.get("repo_name", ""),
                             managed_repos=org_data.get("managed_repos", ""),
                         )
                         logger.info(f"Join: created Coder user+workspace for {user['login']} on {slug}")
@@ -1843,7 +1845,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
         )
 
     # Build config from invite data — invitee may not have repo access yet (expected)
-    invite_repo_name = invite_data.get("repo_name", "egregore-core")
+    invite_repo_name = invite_data.get("repo_name", "")
     repos = invite_data.get("repos", [])
 
     # Try to read egregore.json from repo (may fail if invitee hasn't accepted collab invite yet)
@@ -1944,7 +1946,7 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
                 org_slug=slug,
                 org_name=org_data.get("name", slug),
                 github_org=org_data.get("github_org", ""),
-                repo_name=org_data.get("repo_name", "egregore-core"),
+                repo_name=org_data.get("repo_name", ""),
                 managed_repos=org_data.get("managed_repos", ""),
             )
             logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
@@ -2913,6 +2915,11 @@ async def admin_org_detail(slug: str, admin_user: str = Depends(validate_admin_g
         "telegram_chat_id": org_row.get("telegram_chat_id"),
         "telegram_group_title": org_row.get("telegram_group_title"),
         "transcript_sharing": org_row.get("transcript_sharing", False),
+        "repo_name": org_row.get("repo_name"),
+        "managed_repos": org_row.get("managed_repos"),
+        "hosting_enabled": org_row.get("hosting_enabled"),
+        "hosting_ip": org_row.get("hosting_ip"),
+        "hosting_coder_url": org_row.get("hosting_coder_url"),
     }
 
     members_list = [
@@ -2957,7 +2964,8 @@ async def admin_patch_org(
     allowed = {"created_at", "name", "transcript_sharing",
                 "hosting_enabled", "hosting_ip", "hosting_coder_url",
                 "hosting_coder_token", "hosting_server_id",
-                "telegram_chat_id", "telegram_group_title", "telegram_group_username"}
+                "telegram_chat_id", "telegram_group_title", "telegram_group_username",
+                "repo_name", "managed_repos"}
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail=f"No allowed fields. Allowed: {allowed}")
@@ -3911,7 +3919,7 @@ async def hosting_enable(
 
     github_org = org.get("github_org", "")
     org_name = org.get("name", slug)
-    repo_name = org.get("repo_name", "egregore-core")
+    repo_name = org.get("repo_name", "")
 
     # Get org's API key
     org_config = ORG_CONFIGS.get(slug)
@@ -4315,7 +4323,7 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
         org_slug=slug,
         org_name=org.get("name", slug),
         github_org=org.get("github_org", ""),
-        repo_name=org.get("repo_name", "egregore-core"),
+        repo_name=org.get("repo_name", ""),
         managed_repos=org.get("managed_repos", ""),
     )
 

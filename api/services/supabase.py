@@ -73,6 +73,8 @@ def create_org(
     telegram_chat_id: Optional[str] = None,
     created_by: Optional[str] = None,
     transcript_sharing: bool = False,
+    repo_name: Optional[str] = None,
+    managed_repos: Optional[str] = None,
 ) -> dict:
     """Create a new org. Returns the created org row."""
     data = {
@@ -85,6 +87,10 @@ def create_org(
         "created_by": created_by,
         "transcript_sharing": transcript_sharing,
     }
+    if repo_name is not None:
+        data["repo_name"] = repo_name
+    if managed_repos is not None:
+        data["managed_repos"] = managed_repos
     if telegram_chat_id:
         data["telegram_chat_id"] = telegram_chat_id
 
@@ -797,6 +803,8 @@ def load_all_org_configs() -> dict:
             "telegram_group_username": org.get("telegram_group_username") or "",
             "api_key": key_row.get("key_plaintext") or "",
             "_has_api_key": bool(key_result.data),
+            "repo_name": org.get("repo_name") or "",
+            "managed_repos": org.get("managed_repos") or "",
         }
 
     return configs

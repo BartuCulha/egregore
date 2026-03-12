@@ -45,7 +45,7 @@ class OrgSetup(BaseModel):
 class OrgJoin(BaseModel):
     """Joiner: join an existing org."""
     github_org: str
-    repo_name: str = "egregore-core"
+    repo_name: str = ""
 
 
 class OrgTelegram(BaseModel):
