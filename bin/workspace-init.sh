@@ -56,7 +56,10 @@ fi
 
 # ─── Clone or update Egregore repo ───────────────────────────────
 
-REPO_NAME="${REPO_NAME:-egregore-core}"
+if [ -z "$REPO_NAME" ]; then
+  echo "ERROR: REPO_NAME not set. Check org config."
+  exit 1
+fi
 FORK_URL="${FORK_URL:-https://github.com/${GITHUB_ORG}/${REPO_NAME}.git}"
 
 if [ ! -d "$EGREGORE_DIR/.git" ]; then
