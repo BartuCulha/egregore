@@ -38,6 +38,19 @@ class CoderClient:
             except Exception as e:
                 return {"healthy": False, "error": str(e)}
 
+    async def _get_default_org_id(self) -> str:
+        """Get the default Coder organization ID."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self.base_url}/api/v2/organizations",
+                headers=self._headers(),
+            )
+            if resp.status_code == 200:
+                orgs = resp.json()
+                if orgs:
+                    return orgs[0].get("id", "")
+        return ""
+
     async def create_user(
         self,
         username: str,
@@ -57,6 +70,9 @@ class CoderClient:
             except Exception:
                 pass
 
+            # Get the default organization ID (required by Coder v2.31+)
+            org_id = await self._get_default_org_id()
+
             # Create user
             body = {
                 "username": username,
@@ -65,6 +81,8 @@ class CoderClient:
                 "login_type": "github",
                 "disable_login": False,
             }
+            if org_id:
+                body["organization_ids"] = [org_id]
 
             resp = await client.post(
                 f"{self.base_url}/api/v2/users",
