@@ -107,12 +107,23 @@ CODER_TELEMETRY_ENABLE=false
 CODERENV
 
 # GitHub OAuth — always enabled, uses dedicated Coder OAuth app
+# NOTE: Client ID/Secret are placeholders from env — each VPS needs its own
+# OAuth app with IP-specific callback URL. After provisioning, update these
+# via /hosting enable flow (Step 5) or SSH into the VPS.
 cat >> /etc/coder.d/coder.env <<OAUTHENV
 CODER_OAUTH2_GITHUB_CLIENT_ID={os.environ.get("CODER_GITHUB_CLIENT_ID", "")}
 CODER_OAUTH2_GITHUB_CLIENT_SECRET={os.environ.get("CODER_GITHUB_CLIENT_SECRET", "")}
 CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS=true
 CODER_OAUTH2_GITHUB_ALLOWED_ORGS={github_org}
 OAUTHENV
+
+# GitHub External Auth — required for workspaces to clone private repos
+cat >> /etc/coder.d/coder.env <<EXTAUTHENV
+CODER_EXTERNAL_AUTH_0_TYPE=github
+CODER_EXTERNAL_AUTH_0_ID=github
+CODER_EXTERNAL_AUTH_0_CLIENT_ID={os.environ.get("CODER_GITHUB_CLIENT_ID", "")}
+CODER_EXTERNAL_AUTH_0_CLIENT_SECRET={os.environ.get("CODER_GITHUB_CLIENT_SECRET", "")}
+EXTAUTHENV
 
 # ─── Start Coder ─────────────────────────────────────────────────
 systemctl enable coder
