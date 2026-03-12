@@ -4193,13 +4193,14 @@ async def hosting_info(slug: str, authorization: str = Header(...)):
 
 @app.get("/api/hosting/terminal/{slug}")
 async def hosting_terminal_url(slug: str, github_username: str = Depends(validate_github_token)):
-    """Return the terminal URL for this user's hosted workspace.
+    """Return the terminal URL + session token for this user's hosted workspace.
 
     Flow: user clicks "Open in Browser" on egregore.xyz → frontend calls this →
-    we return the direct terminal URL. Coder handles auth via GitHub OAuth
-    (one-time login, session cookie persists).
+    we generate a short-lived Coder session token → frontend sets it as a cookie
+    on the Coder domain → redirects to terminal. No OAuth app needed on the VPS.
     """
     from .services import supabase as sb
+    from .services.coder import CoderClient
 
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
@@ -4228,9 +4229,26 @@ async def hosting_terminal_url(slug: str, github_username: str = Depends(validat
     if membership.data:
         coder_username = membership.data[0].get("coder_username") or ""
     if not coder_username:
-        return {"url": coder_url}
+        raise HTTPException(status_code=404, detail="No workspace found for this user")
 
-    return {"url": f"{coder_url}/@{coder_username}/egregore.main/terminal"}
+    # Generate short-lived Coder session token (10 min) — no OAuth app needed
+    coder_url_clean, coder_token = await _get_coder_credentials(slug)
+    session_token = ""
+    if coder_token:
+        try:
+            coder_client = CoderClient(coder_url, coder_token)
+            session_token = await coder_client.create_user_token(coder_username, lifetime_seconds=600)
+        except Exception as e:
+            logger.warning(f"Failed to create Coder session token for {coder_username}: {e}")
+
+    if not session_token:
+        raise HTTPException(status_code=503, detail="Could not generate workspace session")
+
+    return {
+        "url": f"{coder_url}/@{coder_username}/egregore.main/terminal",
+        "session_token": session_token,
+        "coder_url": coder_url,
+    }
 
 
 @app.post("/api/hosting/workspace/{slug}")
