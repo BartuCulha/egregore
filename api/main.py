@@ -819,36 +819,33 @@ async def org_join(body: OrgJoin, authorization: str = Header(...)):
             )
             # Check if org has hosting — set coder_username if so
             try:
-                from .services import supabase as sb_join
-                org_row = sb_join.get_client().table("orgs").select(
-                    "hosting_enabled, hosting_coder_url, hosting_coder_token, "
-                    "name, github_org, repo_name, managed_repos"
-                ).eq("slug", slug).execute()
-                if org_row.data and org_row.data[0].get("hosting_enabled"):
+                coder_url, coder_token = await _get_coder_credentials(slug)
+                if coder_url and coder_token:
                     coder_username_for_join = user["login"]
-                    org_data = org_row.data[0]
-                    coder_url = org_data.get("hosting_coder_url", "")
-                    coder_token = org_data.get("hosting_coder_token", "")
-                    if coder_url and coder_token:
-                        from .services.coder import CoderClient
-                        coder_client = CoderClient(coder_url, coder_token)
-                        try:
-                            await coder_client.create_user(
-                                username=user["login"],
-                                email=f"{user['login']}@users.noreply.github.com",
-                                name=user.get("name", user["login"]),
-                            )
-                            await coder_client.create_workspace(
-                                owner=user["login"],
-                                org_slug=slug,
-                                org_name=org_data.get("name", slug),
-                                github_org=org_data.get("github_org", ""),
-                                repo_name=org_data.get("repo_name", "egregore-core"),
-                                managed_repos=org_data.get("managed_repos", ""),
-                            )
-                            logger.info(f"Join: created Coder user+workspace for {user['login']} on {slug}")
-                        except Exception as ce:
-                            logger.warning(f"Join: Coder setup failed for {user['login']}: {ce}")
+                    from .services import supabase as sb_join
+                    org_data_row = sb_join.get_client().table("orgs").select(
+                        "name, github_org, repo_name, managed_repos"
+                    ).eq("slug", slug).execute()
+                    org_data = org_data_row.data[0] if org_data_row.data else {}
+                    from .services.coder import CoderClient
+                    coder_client = CoderClient(coder_url, coder_token)
+                    try:
+                        await coder_client.create_user(
+                            username=user["login"],
+                            email=f"{user['login']}@users.noreply.github.com",
+                            name=user.get("name", user["login"]),
+                        )
+                        await coder_client.create_workspace(
+                            owner=user["login"],
+                            org_slug=slug,
+                            org_name=org_data.get("name", slug),
+                            github_org=org_data.get("github_org", ""),
+                            repo_name=org_data.get("repo_name", "egregore-core"),
+                            managed_repos=org_data.get("managed_repos", ""),
+                        )
+                        logger.info(f"Join: created Coder user+workspace for {user['login']} on {slug}")
+                    except Exception as ce:
+                        logger.warning(f"Join: Coder setup failed for {user['login']}: {ce}")
             except Exception as he:
                 logger.warning(f"Join: hosting check failed: {he}")
 
@@ -1922,49 +1919,46 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
 
     # If org has hosted Coder, pre-create user + workspace (fire-and-forget — don't block invite accept)
     coder_url = None
-    if USE_SUPABASE:
-        try:
+    try:
+        coder_url, coder_token = await _get_coder_credentials(slug)
+        if coder_url and coder_token:
+            from .services.coder import CoderClient
             from .services import supabase as sb
-            rows = sb.get_client().table("orgs").select(
-                "hosting_enabled, hosting_coder_url, hosting_coder_token, "
+            coder_client = CoderClient(coder_url, coder_token)
+            github_username = user["login"]
+            # Get org data for workspace params
+            org_row = sb.get_client().table("orgs").select(
                 "name, github_org, repo_name, managed_repos"
             ).eq("slug", slug).execute()
-            if rows.data and rows.data[0].get("hosting_enabled"):
-                org_data = rows.data[0]
-                coder_url = org_data.get("hosting_coder_url", "")
-                coder_token = org_data.get("hosting_coder_token", "")
-                if coder_url and coder_token:
-                    from .services.coder import CoderClient
-                    coder_client = CoderClient(coder_url, coder_token)
-                    github_username = user["login"]
-                    # Create Coder user
-                    coder_result = await coder_client.create_user(
-                        username=github_username,
-                        email=f"{github_username}@users.noreply.github.com",
-                        name=user.get("name", github_username),
-                    )
-                    logger.info(f"Coder user for invite: {github_username} → {coder_result.get('status')}")
-                    # Create workspace with org params
-                    ws_result = await coder_client.create_workspace(
-                        owner=github_username,
-                        org_slug=slug,
-                        org_name=org_data.get("name", slug),
-                        github_org=org_data.get("github_org", ""),
-                        repo_name=org_data.get("repo_name", "egregore-core"),
-                        managed_repos=org_data.get("managed_repos", ""),
-                    )
-                    logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
-                    # Store coder_username on membership so terminal URL works
-                    try:
-                        sb.get_client().table("memberships").update(
-                            {"coder_username": github_username}
-                        ).eq("org_slug", slug).eq(
-                            "user_id", sb.get_user_by_github(github_username)["id"]
-                        ).execute()
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.warning(f"Failed to create Coder user/workspace for {user['login']}: {e}")
+            org_data = org_row.data[0] if org_row.data else {}
+            # Create Coder user
+            coder_result = await coder_client.create_user(
+                username=github_username,
+                email=f"{github_username}@users.noreply.github.com",
+                name=user.get("name", github_username),
+            )
+            logger.info(f"Coder user for invite: {github_username} → {coder_result.get('status')}")
+            # Create workspace with org params
+            ws_result = await coder_client.create_workspace(
+                owner=github_username,
+                org_slug=slug,
+                org_name=org_data.get("name", slug),
+                github_org=org_data.get("github_org", ""),
+                repo_name=org_data.get("repo_name", "egregore-core"),
+                managed_repos=org_data.get("managed_repos", ""),
+            )
+            logger.info(f"Coder workspace for invite: {github_username} → {ws_result.get('status')}")
+            # Store coder_username on membership so terminal URL works
+            try:
+                sb.get_client().table("memberships").update(
+                    {"coder_username": github_username}
+                ).eq("org_slug", slug).eq(
+                    "user_id", sb.get_user_by_github(github_username)["id"]
+                ).execute()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Failed to create Coder user/workspace for {user['login']}: {e}")
 
     return {
         "status": "accepted",
@@ -3996,25 +3990,10 @@ async def hosting_status(slug: str, authorization: str = Header(...)):
     result = await get_vps_status(slug)
 
     # Auto-store Coder session token when Coder is ready but token is missing
-    if USE_SUPABASE and result.get("coder_ready") and result.get("ip"):
-        try:
-            from .services import supabase as sb
-            rows = sb.get_client().table("orgs").select(
-                "hosting_coder_token, hosting_coder_password"
-            ).eq("slug", slug).execute()
-            if rows.data and not rows.data[0].get("hosting_coder_token"):
-                coder_password = rows.data[0].get("hosting_coder_password", "")
-                if coder_password:
-                    from .services.hosting import get_coder_session_token
-                    session_token = await get_coder_session_token(result["ip"], coder_password)
-                    if session_token:
-                        sb.get_client().table("orgs").update({
-                            "hosting_coder_token": session_token,
-                        }).eq("slug", slug).execute()
-                        result["token_stored"] = True
-                        logger.info(f"Auto-stored Coder session token for {slug}")
-        except Exception as e:
-            logger.warning(f"Failed to auto-store Coder token for {slug}: {e}")
+    if result.get("coder_ready") and result.get("ip"):
+        _, token = await _get_coder_credentials(slug)
+        if token:
+            result["token_stored"] = True
 
     return result
 
@@ -4058,6 +4037,8 @@ async def hosting_deprovision(slug: str, admin_user: str = Depends(validate_admi
                 "hosting_ip": None,
                 "hosting_server_id": None,
                 "hosting_coder_url": None,
+                "hosting_coder_token": None,
+                "hosting_coder_password": None,
                 "hosting_enabled": False,
             }).eq("slug", slug).execute()
         except Exception as e:
@@ -4067,24 +4048,52 @@ async def hosting_deprovision(slug: str, admin_user: str = Depends(validate_admi
     return result
 
 
+async def _get_coder_credentials(slug: str) -> tuple[str, str]:
+    """Get Coder URL and session token for an org, auto-fetching token if missing.
+
+    Returns (coder_url, coder_token). Either may be empty if unavailable.
+    """
+    if not USE_SUPABASE:
+        return "", ""
+
+    from .services import supabase as sb
+
+    rows = sb.get_client().table("orgs").select(
+        "hosting_coder_url, hosting_coder_token, hosting_coder_password, hosting_ip"
+    ).eq("slug", slug).execute()
+    if not rows.data:
+        return "", ""
+
+    row = rows.data[0]
+    coder_url = row.get("hosting_coder_url", "")
+    coder_token = row.get("hosting_coder_token", "")
+
+    # Auto-fetch token if missing but password is available (lazy init)
+    if coder_url and not coder_token:
+        coder_password = row.get("hosting_coder_password", "")
+        ip = row.get("hosting_ip", "")
+        if coder_password and ip:
+            try:
+                from .services.hosting import get_coder_session_token
+                session_token = await get_coder_session_token(ip, coder_password)
+                if session_token:
+                    sb.get_client().table("orgs").update({
+                        "hosting_coder_token": session_token,
+                    }).eq("slug", slug).execute()
+                    coder_token = session_token
+                    logger.info(f"Auto-stored Coder session token for {slug}")
+            except Exception as e:
+                logger.warning(f"Failed to auto-fetch Coder token for {slug}: {e}")
+
+    return coder_url, coder_token
+
+
 @app.post("/api/hosting/user/{slug}")
 async def hosting_create_user(slug: str, body: HostingUser, org: dict = Depends(validate_api_key)):
     """Create a Coder user on an org's VPS. Callable with org API key (used by /invite flow)."""
     from .services.coder import CoderClient
 
-    # Look up the org's Coder URL and admin token
-    coder_url = ""
-    coder_token = ""
-
-    if USE_SUPABASE:
-        try:
-            from .services import supabase as sb
-            rows = sb.get_client().table("orgs").select("hosting_coder_url, hosting_coder_token").eq("slug", slug).execute()
-            if rows.data:
-                coder_url = rows.data[0].get("hosting_coder_url", "")
-                coder_token = rows.data[0].get("hosting_coder_token", "")
-        except Exception as e:
-            logger.warning(f"Failed to look up Coder info: {e}")
+    coder_url, coder_token = await _get_coder_credentials(slug)
 
     if not coder_url or not coder_token:
         raise HTTPException(status_code=404, detail=f"No hosted Coder instance found for {slug}")
@@ -4234,7 +4243,6 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
     """
     from .services import supabase as sb
     from .services.coder import CoderClient
-    from .services.hosting import get_coder_session_token
 
     if not USE_SUPABASE:
         raise HTTPException(status_code=501, detail="Requires Supabase")
@@ -4255,30 +4263,16 @@ async def hosting_ensure_workspace(slug: str, github_username: str = Depends(val
 
     # Get org hosting info
     org_row = sb.get_client().table("orgs").select(
-        "hosting_enabled, hosting_coder_url, hosting_coder_token, "
-        "hosting_coder_password, hosting_ip, "
-        "name, github_org"
+        "hosting_enabled, name, github_org, repo_name, managed_repos"
     ).eq("slug", slug).execute()
     if not org_row.data or not org_row.data[0].get("hosting_enabled"):
         raise HTTPException(status_code=404, detail="Hosting not enabled for this org")
 
     org = org_row.data[0]
-    coder_url = (org.get("hosting_coder_url") or "").rstrip("/")
+
+    coder_url, coder_token = await _get_coder_credentials(slug)
     if not coder_url:
         raise HTTPException(status_code=503, detail="Coder not ready")
-
-    # Get a fresh session token (stored tokens can expire)
-    coder_token = org.get("hosting_coder_token") or ""
-    if not coder_token:
-        ip = org.get("hosting_ip", "")
-        password = org.get("hosting_coder_password", "")
-        if ip and password:
-            coder_token = await get_coder_session_token(ip, password)
-            if coder_token:
-                sb.get_client().table("orgs").update(
-                    {"hosting_coder_token": coder_token}
-                ).eq("slug", slug).execute()
-
     if not coder_token:
         raise HTTPException(status_code=503, detail="Cannot authenticate with Coder")
 
@@ -4341,21 +4335,12 @@ async def hosting_workspace_status(
             coder_username = mem.data[0]["coder_username"]
 
     rows = sb.get_client().table("orgs").select(
-        "hosting_enabled, hosting_coder_url, hosting_coder_token, hosting_ip, hosting_coder_password"
+        "hosting_enabled"
     ).eq("slug", slug).execute()
     if not rows.data or not rows.data[0].get("hosting_enabled"):
         raise HTTPException(status_code=404, detail="Hosting not enabled")
 
-    org = rows.data[0]
-    coder_url = (org.get("hosting_coder_url") or "").rstrip("/")
-    coder_token = org.get("hosting_coder_token", "")
-
-    if not coder_token:
-        ip = org.get("hosting_ip", "")
-        password = org.get("hosting_coder_password", "")
-        if ip and password:
-            coder_token = await get_coder_session_token(ip, password)
-
+    coder_url, coder_token = await _get_coder_credentials(slug)
     if not coder_token:
         raise HTTPException(status_code=503, detail="Cannot authenticate with Coder")
 
