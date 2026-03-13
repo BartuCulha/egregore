@@ -231,6 +231,47 @@ class CoderClient:
                     }
             return {"found": False, "ready": False}
 
+    async def delete_workspace(self, owner: str, workspace_name: str = "egregore") -> dict:
+        """Delete a user's workspace. Returns status."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            workspaces = await self.list_workspaces(owner=owner)
+            for ws in workspaces:
+                if ws.get("name") == workspace_name:
+                    ws_id = ws.get("id")
+                    resp = await client.put(
+                        f"{self.base_url}/api/v2/workspaces/{ws_id}/dormant",
+                        headers=self._headers(),
+                        json={"dormant": True},
+                    )
+                    # Now delete
+                    resp = await client.delete(
+                        f"{self.base_url}/api/v2/workspaces/{ws_id}",
+                        headers=self._headers(),
+                    )
+                    if resp.status_code in (200, 204):
+                        logger.info(f"Coder workspace deleted: {owner}/{workspace_name}")
+                        return {"status": "deleted"}
+                    else:
+                        logger.warning(f"Workspace deletion failed: {resp.status_code}")
+                        return {"status": "error", "detail": resp.text[:200]}
+            return {"status": "not_found"}
+
+    async def delete_user(self, username: str) -> dict:
+        """Delete a Coder user. Workspaces must be deleted first."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(
+                f"{self.base_url}/api/v2/users/{username}",
+                headers=self._headers(),
+            )
+            if resp.status_code in (200, 204):
+                logger.info(f"Coder user deleted: {username}")
+                return {"status": "deleted"}
+            elif resp.status_code == 404:
+                return {"status": "not_found"}
+            else:
+                logger.warning(f"Coder user deletion failed: {resp.status_code}")
+                return {"status": "error", "detail": resp.text[:200]}
+
     async def create_user_token(self, username: str, lifetime_seconds: int = 600) -> str:
         """Create a short-lived API token for a user. Returns the token string or empty."""
         async with httpx.AsyncClient(timeout=10) as client:
