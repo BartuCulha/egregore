@@ -7,3 +7,4 @@ supabase==2.10.0
 python-multipart==0.0.12
 cryptography>=42.0
 resend
+anthropic>=0.39.0
