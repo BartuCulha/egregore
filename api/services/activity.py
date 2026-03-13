@@ -163,7 +163,8 @@ async def _resolve_and_fetch_handoffs(org: dict, me: str) -> tuple[dict, dict]:
         RETURN s.topic AS topic, s.date AS date, author.name AS author,
                s.filePath AS filePath, s.id AS sessionId,
                coalesce(s.handoffStatus, 'pending') AS status,
-               s.handoffResponse AS response
+               s.handoffResponse AS response,
+               s.summary AS summary
         ORDER BY
           CASE coalesce(s.handoffStatus, 'pending')
             WHEN 'pending' THEN 0

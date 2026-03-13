@@ -34,8 +34,6 @@ VERIFY → WELCOME → HARVEST_IDENTITY → HARVEST_CONNECTION → CONSENT → O
 
 Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY — jump directly to the saved phase and use any data already in state.
 
-**CRITICAL: Fresh joiner vs. resumed onboarding.** If `onboarding_complete` is false but `onboarding.phase` does NOT exist, this is a **brand new joiner** — the setup script pre-populated fields like `github_configured`, `workspace_ready`, etc. Start fresh from VERIFY. **NEVER say "Welcome back" or "pick up where we left off."** Treat this user as if you've never seen them before. The pre-populated fields are from the automated join flow, not a previous session.
-
 If `onboarding_complete` is true, say: "You're already set up. Run `/me` to update your profile, or just start working." Then stop.
 
 ---
