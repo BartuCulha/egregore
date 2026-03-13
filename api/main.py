@@ -2226,6 +2226,31 @@ async def remove_member(
             except Exception as e:
                 errors.append(f"Neo4j status update failed: {str(e)}")
 
+    # --- Step 4: Coder cleanup (if org has hosted workspace) ---
+    try:
+        coder_url, coder_token = await _get_coder_credentials(slug)
+        if coder_url and coder_token:
+            from .services.coder import CoderClient
+            coder_client = CoderClient(coder_url, coder_token)
+            # Delete workspace first (required before deleting user)
+            ws_result = await coder_client.delete_workspace(owner=username)
+            if ws_result.get("status") == "deleted":
+                actions.append("Coder: workspace deleted")
+            elif ws_result.get("status") == "not_found":
+                actions.append("Coder: no workspace found")
+            else:
+                errors.append(f"Coder workspace deletion: {ws_result.get('detail', 'unknown error')}")
+            # Delete user
+            user_result = await coder_client.delete_user(username)
+            if user_result.get("status") == "deleted":
+                actions.append("Coder: user deleted")
+            elif user_result.get("status") == "not_found":
+                actions.append("Coder: no user found")
+            else:
+                errors.append(f"Coder user deletion: {user_result.get('detail', 'unknown error')}")
+    except Exception as e:
+        errors.append(f"Coder cleanup failed: {str(e)}")
+
     status = "removed" if not errors else "removed"  # partial success still counts
     return RemoveMemberResponse(
         status=status,
