@@ -441,12 +441,6 @@ Return a JSON object with this structure:
      "confidence_description": "free-form: how confident are the speakers, what's the basis",
      "confidence_tag": "strong_agreement|data_backed|single_speaker|exploratory|contentious|null"}
   ],
-  "actions": [
-    {"owner": "person_name", "text": "what they committed to do",
-     "deadline_tag": "today|this_week|next_week|two_weeks|month|null",
-     "deadline_raw": "free-form: exact words used about timing",
-     "evidence_quote": "...", "priority_tag": "high|medium|low|null"}
-  ],
   "_raw_notes": "Multi-paragraph prose: your full read on substance, priorities, dependencies, and events. Include reasoning, hedges, and observations that don't fit the structured fields. Note any connections to the open questions or quests provided."
 }
 
@@ -461,7 +455,6 @@ Return a JSON object with this structure:
 7. Tag fields (*_tag) are optional suggestions. If no predefined tag fits, leave it null and let the description carry the signal.
 8. For open_questions: flag questions from previous meetings (provided above) that this meeting addresses.
 9. The _raw_notes section is critical — this is where your nuanced analysis goes. Don't skimp on it.
-10. For actions: extract every commitment where someone says they will do something. Use the person's actual name (from attendee list), not "me"/"them". Include the exact timing words they used in deadline_raw.
 
 Return ONLY valid JSON. No markdown fences, no explanation.
 ```
@@ -636,17 +629,7 @@ Each merged artifact gets:
 - `evolution_context`: from Continuity (what it supersedes/reinforces)
 - `related_extracts`: cross-references between items (array of {id, relationship})
 
-Separate **action items** from knowledge artifacts. Actions become **Todo nodes** in the graph (see Step 4c), not Artifact files.
-
-For each action from the Substance agent's `actions` array, produce a structured task:
-- `id`: `meeting-{YYYY-MM-DD}-{slug}-{N}` (sequential number)
-- `text`: action text
-- `owner`: person graph name
-- `priority`: high/medium/low
-- `deadlineRaw`: exact words from meeting (e.g. "by Friday", "today")
-- `topics`: 1-3 topic tags
-
-**Note:** `org` is a reserved API gateway parameter — do NOT pass it as a Cypher parameter. The gateway adds it automatically.
+Separate **action items** from knowledge artifacts. Actions don't become Artifact files.
 
 ##### 2. Meeting Intelligence Briefing
 
@@ -1050,42 +1033,22 @@ Add SUPERSEDES relationship if reflection produced one:
 }
 ```
 
-**Todo nodes** (from Substance agent `actions` — one per action item):
-
-Write the batch to a temp file to avoid shell quoting issues with Cypher strings:
-```bash
-cat > /tmp/meeting-todos.json << 'TODOEOF'
-[
-  {"statement": "MERGE (t:Todo {id: $id}) SET t.text = $text, t.status = 'open', t.priority = $priority, t.source = 'meeting', t.created = datetime(), t.deadlineRaw = $deadlineRaw, t.topics = $topics WITH t OPTIONAL MATCH (p:Person {name: $owner}) FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END | MERGE (t)-[:BY]->(p)) RETURN t.id", "parameters": {"id": "{meeting-YYYY-MM-DD-slug-N}", "text": "{action}", "priority": "{high|medium|low}", "deadlineRaw": "{exact words}", "topics": ["topic1"], "owner": "{person name}"}},
-  ...one per action...
-]
-TODOEOF
-bash bin/graph-batch.sh "$(cat /tmp/meeting-todos.json)"
-```
-
-**Todo → Meeting relationships** (FROM_MEETING):
-```json
-{"statement": "MATCH (t:Todo {id: $tid}), (m:Meeting {id: $mid}) MERGE (t)-[:FROM_MEETING]->(m)", "parameters": {"tid": "...", "mid": "..."}}
-```
-
-**Important**: Do NOT pass `org` as a Cypher parameter — it's reserved by the API gateway and added automatically.
-
-Execute all batches (may need splitting at 20-query limit):
+Execute the entire batch:
 ```bash
 bash bin/graph-batch.sh '[{...}, {...}, ...]'
 ```
 
 Show progress:
 ```
-Creating artifacts + tasks...
+Creating artifacts...
 
 [1/6] ✓ Writing meetings/2026-02-12-weekly-sync.md (intelligence briefing)
   [2/6] ✓ Writing knowledge/decisions/2026-02-12-use-stdio-mcp-transport.md
         ✓ Writing knowledge/findings/2026-02-12-onboarding-needs-guided-tour.md
-  [3/6] ✓ Indexed in knowledge graph (batch: 12 queries)
-  [4/6] ✓ Linked to 2 quests
-  [5/6] ✓ Created 5 tasks (oz: 2, alice: 3) — visible in /todo
-  [6/6] ✓ Auto-saved
+        ✓ Writing knowledge/findings/2026-02-12-usage-based-gating.md
+  [3/5] ✓ Indexed in knowledge graph (batch: 12 queries)
+  [4/5] ✓ Linked to 2 quests
+  [5/5] ✓ Auto-saved
 ```
 
 ### Step 12: Mark processed
