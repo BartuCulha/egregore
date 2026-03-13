@@ -94,6 +94,8 @@ Removing {username} from {org_name}...
   GitHub access:   revoked
   Membership:      deactivated
   Knowledge graph: marked as removed
+  Coder workspace: deleted (if hosted)
+  Coder user:      deleted (if hosted)
 
 {username} can no longer access this Egregore.
 Their contributions are preserved in the graph.
@@ -109,6 +111,8 @@ Removing {username} from {org_name}...
   Contributions:   orphaned (artifacts kept)
   Person node:     deleted
   Telemetry:       deleted
+  Coder workspace: deleted (if hosted)
+  Coder user:      deleted (if hosted)
 
 {username} has been fully removed from this Egregore.
 ```
