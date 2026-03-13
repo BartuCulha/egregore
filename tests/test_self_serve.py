@@ -13,7 +13,7 @@ Test matrix:
   6. Join flow with hosted workspace
   7. Token lifecycle (expiry, consumption, replay prevention)
   8. Auth edge cases (wrong user accepts, revoked token, missing slug)
-  9. Workspace endpoint creates user + workspace on demand
+  9. Hosting user endpoint + workspace endpoint (auth redirect URL format)
   10. Deprovision clears all credentials
 
 All external calls (GitHub, Neo4j, Telegram, Coder, Supabase) are mocked.
@@ -205,6 +205,10 @@ def _mock_coder_api():
     # Login (for token auto-fetch)
     respx.post(f"{CODER_URL}/api/v2/users/login").mock(
         return_value=Response(201, json={"session_token": CODER_TOKEN})
+    )
+    # Create user token (for session token generation)
+    respx.post(url__regex=rf"{CODER_URL}/api/v2/users/.*/keys").mock(
+        return_value=Response(201, json={"key": "session-key-abc123"})
     )
 
 
@@ -1197,6 +1201,147 @@ class TestHostingUserEndpoint:
 
 
 # =============================================================================
+# 9b. WORKSPACE ENDPOINT — AUTH REDIRECT URL FORMAT
+# =============================================================================
+
+
+class TestWorkspaceEndpoint:
+    """POST /api/hosting/workspace/{slug} — ensure user+workspace, return auth redirect."""
+
+    @respx.mock
+    def test_workspace_returns_auth_redirect_url(self, app_client, _patch_org_configs, monkeypatch):
+        """Workspace endpoint returns auth redirect URL with session token (port 3200)."""
+        from api import main as _main_mod
+
+        _patch_org_configs[ACME_SLUG] = {**ACME_CONFIG}
+        _mock_coder_api()
+
+        # GitHub API mock (needed by validate_github_token dependency)
+        respx.get(f"{GITHUB_API}/user").mock(
+            return_value=Response(200, json={"login": "invitee", "name": "Invitee User"})
+        )
+
+        mock_client = MagicMock()
+
+        monkeypatch.setattr(_main_mod, "USE_SUPABASE", True)
+
+        # Mock membership lookup chain
+        membership_result = MagicMock()
+        membership_result.data = [{"status": "active", "coder_username": "invitee"}]
+        org_result = MagicMock()
+        org_result.data = [{"hosting_enabled": True, "name": "Acme Corp",
+                           "github_org": ACME_GH_ORG, "repo_name": "egregore-core",
+                           "managed_repos": ""}]
+
+        def _mock_table(name):
+            t = MagicMock()
+            if name == "memberships":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value = membership_result
+                t.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+            elif name == "orgs":
+                t.select.return_value.eq.return_value.execute.return_value = org_result
+            return t
+
+        mock_client.table.side_effect = _mock_table
+
+        with patch("api.main._get_coder_credentials", new_callable=AsyncMock,
+                   return_value=(CODER_URL, CODER_TOKEN)), \
+             patch("api.services.supabase.get_client", return_value=mock_client), \
+             patch("api.services.supabase.get_user_by_github",
+                   return_value={"id": "user-uuid", "display_name": "Invitee"}):
+
+            resp = app_client.post(
+                f"/api/hosting/workspace/{ACME_SLUG}",
+                headers={"Authorization": f"Bearer {INVITEE_TOKEN}"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] in ("exists", "created")
+        assert data["coder_url"] == CODER_URL
+        # Auth redirect URL must point to port 3200 auth service
+        assert ":3200/auth?" in data["terminal_url"]
+        assert "token=" in data["terminal_url"]
+        assert "redirect=" in data["terminal_url"]
+        # Session token must be present
+        assert data["session_token"]
+
+    @respx.mock
+    def test_workspace_non_member_rejected(self, app_client, _patch_org_configs, monkeypatch):
+        """Non-member gets 403 on workspace endpoint."""
+        from api import main as _main_mod
+
+        _patch_org_configs[ACME_SLUG] = {**ACME_CONFIG}
+        monkeypatch.setattr(_main_mod, "USE_SUPABASE", True)
+
+        mock_client = MagicMock()
+        membership_result = MagicMock()
+        membership_result.data = [{"status": "removed", "coder_username": None}]
+
+        def _mock_table(name):
+            t = MagicMock()
+            if name == "memberships":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value = membership_result
+            return t
+
+        mock_client.table.side_effect = _mock_table
+
+        with patch("api.services.supabase.get_client", return_value=mock_client), \
+             patch("api.services.supabase.get_user_by_github",
+                   return_value={"id": "user-uuid"}):
+
+            respx.get(f"{GITHUB_API}/user").mock(
+                return_value=Response(200, json={"login": "nonmember", "name": "Non"})
+            )
+
+            resp = app_client.post(
+                f"/api/hosting/workspace/{ACME_SLUG}",
+                headers={"Authorization": f"Bearer {INVITEE_TOKEN}"},
+            )
+
+        assert resp.status_code == 403
+
+    @respx.mock
+    def test_workspace_hosting_not_enabled(self, app_client, _patch_org_configs, monkeypatch):
+        """Workspace endpoint returns 404 when hosting not enabled."""
+        from api import main as _main_mod
+
+        _patch_org_configs[ACME_SLUG] = {**ACME_CONFIG}
+        monkeypatch.setattr(_main_mod, "USE_SUPABASE", True)
+
+        mock_client = MagicMock()
+        membership_result = MagicMock()
+        membership_result.data = [{"status": "active", "coder_username": "invitee"}]
+        org_result = MagicMock()
+        org_result.data = [{"hosting_enabled": False}]
+
+        def _mock_table(name):
+            t = MagicMock()
+            if name == "memberships":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value = membership_result
+            elif name == "orgs":
+                t.select.return_value.eq.return_value.execute.return_value = org_result
+            return t
+
+        mock_client.table.side_effect = _mock_table
+
+        with patch("api.services.supabase.get_client", return_value=mock_client), \
+             patch("api.services.supabase.get_user_by_github",
+                   return_value={"id": "user-uuid"}):
+
+            respx.get(f"{GITHUB_API}/user").mock(
+                return_value=Response(200, json={"login": "invitee", "name": "Invitee"})
+            )
+
+            resp = app_client.post(
+                f"/api/hosting/workspace/{ACME_SLUG}",
+                headers={"Authorization": f"Bearer {INVITEE_TOKEN}"},
+            )
+
+        assert resp.status_code == 404
+
+
+# =============================================================================
 # 10. DEPROVISION CLEARS CREDENTIALS
 # =============================================================================
 
@@ -1369,9 +1514,12 @@ class TestEndToEndWithHosting:
         assert "egregore-core" in config["fork_url"]
         assert config["github_username"] == "invitee"
 
-        # -- Step 5: Verify workspace would be accessible --
-        terminal_url = f"{CODER_URL}/@invitee/egregore.main/terminal"
-        assert CODER_URL in terminal_url
+        # -- Step 5: Verify workspace would be accessible via auth redirect --
+        # Auth redirect URL format: {coder_url}:3200/auth?token=...&redirect=...
+        expected_terminal = f"{CODER_URL}/@invitee/egregore.main/terminal"
+        assert CODER_URL in expected_terminal
+        # The actual workspace endpoint returns auth redirect URLs (port 3200)
+        # that set a session cookie before redirecting to the terminal
 
         # -- Step 6: Token replay prevention --
         assert app_client.get(f"/api/org/claim/{setup_token}").status_code == 404

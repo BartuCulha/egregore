@@ -94,67 +94,31 @@ All subsequent SSH commands use: `sshpass -p "$VPS_PWD" ssh -o StrictHostKeyChec
 
 Verify `sshpass` is installed locally: `which sshpass` (install via `brew install hudochenkov/sshpass/sshpass` if missing).
 
-### Step 5: Create per-org GitHub OAuth App
+### Step 5: Verify auth redirect service (port 3200)
 
-**CRITICAL**: Each Coder VPS needs its own GitHub OAuth app — callback URLs are IP-specific. A shared OAuth app will fail with "redirect_uri is not associated with this application."
+**NO per-VPS OAuth apps.** Auth is handled via session token cookies — the API generates short-lived Coder session tokens, and a redirect service on port 3200 sets the cookie before redirecting to the terminal.
 
-Tell the user:
-
-> Coder needs a GitHub OAuth app for login. Create one now:
->
-> 1. Go to https://github.com/organizations/{github_org}/settings/applications/new
->    (or https://github.com/settings/applications/new for personal)
-> 2. **Application name**: `Egregore Coder — {slug}`
-> 3. **Homepage URL**: `http://{ip}`
-> 4. **Authorization callback URL**: `http://{ip}/api/v2/users/oauth2/github/callback`
-> 5. Click "Register application"
-> 6. Copy the **Client ID**
-> 7. Click "Generate a new client secret" and copy the **Client Secret**
->
-> Give me the Client ID and Client Secret.
-
-**Important**: GitHub OAuth apps only allow ONE callback URL. Cannot reuse an existing app from another VPS.
-
-Once user provides credentials, SSH into the VPS and configure BOTH OAuth login AND external auth (for repo cloning):
-
+Verify the auth redirect service is running:
 ```bash
 sshpass -p "$VPS_PWD" ssh -o StrictHostKeyChecking=no root@$IP "
-# Update OAuth login credentials
-sed -i 's/^CODER_OAUTH2_GITHUB_CLIENT_ID=.*/CODER_OAUTH2_GITHUB_CLIENT_ID=$CLIENT_ID/' /etc/coder.d/coder.env
-sed -i 's/^CODER_OAUTH2_GITHUB_CLIENT_SECRET=.*/CODER_OAUTH2_GITHUB_CLIENT_SECRET=$CLIENT_SECRET/' /etc/coder.d/coder.env
-
-# Add external auth (required for workspaces to clone private repos)
-# Check if already present to avoid duplicates
-if ! grep -q 'CODER_EXTERNAL_AUTH_0_TYPE' /etc/coder.d/coder.env; then
-  cat >> /etc/coder.d/coder.env <<EOF
-CODER_EXTERNAL_AUTH_0_TYPE=github
-CODER_EXTERNAL_AUTH_0_ID=github
-CODER_EXTERNAL_AUTH_0_CLIENT_ID=$CLIENT_ID
-CODER_EXTERNAL_AUTH_0_CLIENT_SECRET=$CLIENT_SECRET
-EOF
-else
-  sed -i 's/^CODER_EXTERNAL_AUTH_0_CLIENT_ID=.*/CODER_EXTERNAL_AUTH_0_CLIENT_ID=$CLIENT_ID/' /etc/coder.d/coder.env
-  sed -i 's/^CODER_EXTERNAL_AUTH_0_CLIENT_SECRET=.*/CODER_EXTERNAL_AUTH_0_CLIENT_SECRET=$CLIENT_SECRET/' /etc/coder.d/coder.env
-fi
-
-systemctl restart coder
+systemctl status coder-auth.service
+curl -sf 'http://localhost:3200/auth?token=test&redirect=/' -o /dev/null -w '%{http_code}'
 "
 ```
 
-Wait for Coder to come back up:
+If the service isn't running or returns errors:
 ```bash
-for i in $(seq 1 10); do
-  curl -sf "http://$IP/api/v2/buildinfo" > /dev/null 2>&1 && break
-  sleep 2
-done
+sshpass -p "$VPS_PWD" ssh -o StrictHostKeyChecking=no root@$IP "
+systemctl restart coder-auth.service
+"
 ```
+
+The auth redirect script lives at `/opt/coder-auth-redirect.py`. It MUST use `ThreadingMixIn` and override `address_string()` to prevent reverse DNS lookup hangs.
 
 Confirm:
 ```
-  ✓ GitHub OAuth configured for {slug}
-  ✓ External auth configured (workspace repo cloning)
-  ✓ Coder restarted
-  Login URL: http://{ip} (GitHub OAuth)
+  ✓ Auth redirect service running on port 3200
+  ✓ Session token auth ready (no OAuth needed)
 ```
 
 ### Step 6: Verify GHCR image is pullable
@@ -291,8 +255,8 @@ Show progress:
 
 ```
   Coder URL: http://{ip}
-  Login: GitHub OAuth
-  Members can open their workspace in browser.
+  Auth: session token cookies via port 3200 (no OAuth needed)
+  Members open their workspace from egregore.xyz — auth is automatic.
 ```
 
 ---
