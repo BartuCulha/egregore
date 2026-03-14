@@ -31,7 +31,7 @@ from .models import (
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
     HostingProvision, HostingUser, UserKeysUpdate,
-    GoogleOAuthCallback, GooglePromote,
+    GoogleOAuthCallback, GooglePromote, ScribeSummarize,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -4980,6 +4980,25 @@ async def admin_debug(admin_user: str = Depends(validate_admin_github_token)):
         except Exception as e:
             results["neo4j_sessions"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     return results
+
+
+# =============================================================================
+# SPIRITS
+# =============================================================================
+
+
+@app.post("/api/spirits/scribe")
+async def spirits_scribe(body: ScribeSummarize, org: dict = Depends(validate_api_key)):
+    """Scribe spirit: summarize an artifact using Claude."""
+    from .services.scribe import summarize_artifact
+    try:
+        summary = await summarize_artifact(body.title, body.content, body.type)
+        return {"summary": summary}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("[SCRIBE] Error summarizing '%s': %s", body.title, e)
+        raise HTTPException(status_code=500, detail="Summarization failed")
 
 
 if __name__ == "__main__":
