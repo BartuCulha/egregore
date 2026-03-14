@@ -118,7 +118,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR, Harvest, HarvestSession, HarvestTurn. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, HAS_SESSION, HAS_TURN, IMPLEMENTS, INITIATED_BY, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY, WITH.
 
 ## Notifications
 
@@ -247,7 +247,7 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 When a user describes intent that maps to a command, invoke it — don't wait for them to type the slash. Each command file has a `## When to invoke` section with trigger phrases and disambiguation. Load the command to get the full spec.
 
 **Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
-**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
+**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest` `/harvest`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
@@ -267,6 +267,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs `/ingest google` (Google Workspace content) vs "process the call" (ambiguous — ask which type)
 - Connectors: `/connect google` (enable/auth) vs `/ingest google` (bring content in) — "connect google" = setup, "import from drive" = ingest
 - Identity: `/me` (view profile or set display name) — "who am I", "call me oz", "change my name"
+- Elicitation: `/harvest` (adaptive, multi-person or solo, produces synthesis) vs `/ask` (one question to a person) vs `/ingest user-interview` (analyzing existing transcript, not live elicitation)
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
 - PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
 - Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop

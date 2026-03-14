@@ -582,7 +582,7 @@ mark-dormant)
     ;;
 
   *)
-echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest","pause-quest","mark-dormant","expire-handoffs","auto-link-topics","migrate-dates","link-artifact-quest","derive-topics","link-sessions-quests","relate-by-title"]}'
+    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest","pause-quest","mark-dormant","expire-handoffs","auto-link-topics","migrate-dates","link-artifact-quest","derive-topics","link-sessions-quests","relate-by-title"]}'
     exit 1
     ;;
 
