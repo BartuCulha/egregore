@@ -739,7 +739,7 @@ fi
     MATCH (s:Session)-[:BY]->(p:Person {github: \$gh})
     WHERE s.wrappedAt IS NOT NULL
     RETURN toString(s.wrappedAt) AS t
-    ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
+ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
   " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null | jq -r '.values[0][0] // empty' 2>/dev/null)
   if [ -z "$LAST_END" ]; then
     LAST_END="$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo '2026-03-03')T00:00:00Z"

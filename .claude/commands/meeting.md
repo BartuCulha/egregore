@@ -403,7 +403,348 @@ Guidelines:
 
 ### Step 8: Present proposal
 
-Show the meta-analysis preview + merged extractions.
+## Active Quests
+
+{INSERT Q5 RESULTS — or "No active quests." if empty}
+
+## Transcript
+
+{INSERT TRANSCRIPT — use transcript_structured if available, otherwise transcript_text}
+
+## Instructions
+
+Analyze the transcript through the lens of SUBSTANCE: what was said, what matters, what depends on what, what's happening in the world around this meeting.
+
+Return a JSON object with this structure:
+
+{
+  "priorities": [
+    {"item": "...", "description": "free-form: why this matters, what makes it urgent",
+     "urgency_tag": "high|medium|low|null", "importance_tag": "high|medium|low|null",
+     "evidence_quote": "...", "speaker": "me|them"}
+  ],
+  "dependencies": [
+    {"description": "free-form: what blocks what, why, and current state",
+     "blocker": "...", "blocked": "...", "owner": "me|them|null",
+     "evidence_quote": "..."}
+  ],
+  "events": [
+    {"description": "free-form: what happened or is happening, internal or external",
+     "type_tag": "external|internal|null",
+     "evidence_quote": "..."}
+  ],
+  "enrichments": [
+    {"scaffold_id": "s1|new", "category": "decision|finding|pattern|action",
+     "title": "...", "brief": "...", "evidence_quote": "...",
+     "speaker": "me|them", "tradeoffs": ["Pro: ...", "Con: ..."],
+     "context": "...", "open_questions": ["..."],
+     "confidence_description": "free-form: how confident are the speakers, what's the basis",
+     "confidence_tag": "strong_agreement|data_backed|single_speaker|exploratory|contentious|null"}
+  ],
+  "_raw_notes": "Multi-paragraph prose: your full read on substance, priorities, dependencies, and events. Include reasoning, hedges, and observations that don't fit the structured fields. Note any connections to the open questions or quests provided."
+}
+
+## Rules
+
+1. Match scaffold items to transcript segments. For gap items (gap: true), try especially hard to find evidence.
+2. Extract the richest quote — prioritize signal over length. Max 120 chars per quote.
+3. Classify speaker: "microphone" source = "me", "system" source = "them".
+4. Find items the panel missed — things discussed substantively but not in the scaffold. Use scaffold_id: "new".
+5. Do NOT extract small talk, logistics, or trivia.
+6. If a scaffold item has no transcript discussion at all, omit it from enrichments (don't fabricate).
+7. Tag fields (*_tag) are optional suggestions. If no predefined tag fits, leave it null and let the description carry the signal.
+8. For open_questions: flag questions from previous meetings (provided above) that this meeting addresses.
+9. The _raw_notes section is critical — this is where your nuanced analysis goes. Don't skimp on it.
+
+Return ONLY valid JSON. No markdown fences, no explanation.
+```
+
+##### Agent 2: Dynamics Analyst
+
+**Input**: transcript (structured or text) + attendee names. NO scaffold, NO prior context (fresh read).
+
+**Task tool prompt**:
+
+```
+You are the Dynamics Analyst for a meeting analysis pipeline. Your job is to read HOW things were said — tone, energy, convictions, interpersonal dynamics. You receive NO prior context intentionally — we want a fresh read without anchoring.
+
+## Attendees
+
+{INSERT ATTENDEE LIST with graph names, e.g. "cem (me), renc (them)"}
+
+## Transcript
+
+{INSERT TRANSCRIPT — use transcript_structured if available, otherwise transcript_text}
+
+## Instructions
+
+Analyze the transcript through the lens of DYNAMICS: how people interacted, what the emotional texture was, what convictions were expressed and how strongly.
+
+Return a JSON object with this structure:
+
+{
+  "tone": {
+    "description": "free-form: overall emotional texture of the meeting and how it evolved",
+    "arc": "free-form: the emotional trajectory from start to end",
+    "moments": [
+      {"description": "free-form: what happened and what it felt like",
+       "quote": "...", "speaker": "me|them"}
+    ]
+  },
+  "dynamics": {
+    "description": "free-form: who drove the conversation, how they interacted, where they aligned or diverged",
+    "pattern_tag": "collaborative_building|tension_then_alignment|one_sided|brainstorming|debate|null",
+    "alignment_estimate": 0.85,
+    "tension_points": [
+      {"description": "free-form: what the tension was about and how it played out",
+       "quote": "..."}
+    ]
+  },
+  "convictions": [
+    {"statement": "...", "speaker": "me|them",
+     "description": "free-form: how strongly held, what it's based on, whether challenged",
+     "strength_tag": "assertion|hypothesis|exploration|null",
+     "quote": "..."}
+  ],
+  "_raw_notes": "Multi-paragraph prose: your full read on interpersonal dynamics, emotional undercurrents, power dynamics, and anything that doesn't reduce to fields. What was unsaid? Where did energy spike or drop? Who was driving and who was following?"
+}
+
+## Rules
+
+1. Read tone from word choice, pacing, emphasis patterns, and conversational flow — not just content.
+2. Classify speaker: "microphone" source = "me", "system" source = "them".
+3. alignment_estimate: 0.0 (total disagreement) to 1.0 (perfect sync). Base it on actual evidence.
+4. Tag fields (*_tag) are optional. If no predefined tag fits, leave null and let description carry the signal. New tags welcome if they capture something the predefined ones don't.
+5. Convictions: distinguish between things stated as fact (assertion), things proposed tentatively (hypothesis), and things thrown out for discussion (exploration).
+6. The _raw_notes section is where your real analysis lives. Be honest about uncertainty.
+
+Return ONLY valid JSON. No markdown fences, no explanation.
+```
+
+##### Agent 3: Continuity Analyst
+
+**Input**: panel_text + scaffold from Pass 0 + Q1 results (recent artifacts) + Q2 results (open questions) + Q3 results (topic recurrence) + Q4 results (decision evolution). NO transcript (keeps it cheap and focused).
+
+**Task tool prompt**:
+
+```
+You are the Continuity Analyst for a meeting analysis pipeline. Your job is to compare what THIS meeting covers against what the organization already knows. You read the panel summary (not the transcript) and cross-reference it with historical graph data.
+
+## Panel Summary
+
+{INSERT PANEL_TEXT}
+
+## Scaffold (extracted items from this meeting)
+
+{INSERT SCAFFOLD JSON}
+
+## Recent Meeting Artifacts (30 days)
+
+{INSERT Q1 RESULTS — or "No recent meeting artifacts." if empty}
+
+## Open Questions from Previous Meetings
+
+{INSERT Q2 RESULTS — or "No previous open questions." if empty}
+
+## Topic Recurrence (60 days)
+
+{INSERT Q3 RESULTS — or "No recurring topics found." if empty}
+
+## Decision Evolution Chains
+
+{INSERT Q4 RESULTS — or "No decision evolution chains found." if empty}
+
+## Instructions
+
+Analyze how this meeting fits into the arc of the organization's recent work. What evolved? What recurred? What threads were picked up or dropped?
+
+Return a JSON object with this structure:
+
+{
+  "decision_evolution": [
+    {"topic": "...", "description": "free-form: how this position has changed across meetings and why",
+     "current_position": "...",
+     "previous_positions": [{"meeting": "...", "position": "...", "artifact_id": "..."}],
+     "trajectory_tag": "shifted|reinforced|reversed|refined|null"}
+  ],
+  "recurring_topics": [
+    {"topic": "...", "description": "free-form: what's happening with this theme over time",
+     "meetings_count": 4, "first_seen": "..."}
+  ],
+  "open_threads": [
+    {"description": "free-form: what thread from a previous meeting was addressed, continued, or dropped here",
+     "status": "addressed|continued|dropped|null",
+     "from_meeting": "...", "artifact_id": "..."}
+  ],
+  "meta_patterns": [
+    {"description": "free-form: organizational-level pattern observed across meetings (convergence, oscillation, drift, etc.)"}
+  ],
+  "_raw_notes": "Multi-paragraph prose: your full read on how this meeting fits into the arc of the organization's evolution. Connections, tensions, and trajectories that don't fit the structured fields."
+}
+
+## Rules
+
+1. Only reference data actually present in the graph context provided. Do not fabricate history.
+2. If graph context is sparse (few or no previous artifacts), say so in _raw_notes and focus on what CAN be compared.
+3. trajectory_tag is optional. Use it when the pattern is clear, leave null when ambiguous.
+4. open_threads: specifically check if any of the "Open Questions from Previous Meetings" were addressed in this meeting's scaffold items.
+5. meta_patterns: look for org-level dynamics (e.g., "pricing keeps being revisited" or "team is converging on agent-first architecture").
+6. The _raw_notes section is where your real analysis lives. Be honest about confidence levels.
+
+Return ONLY valid JSON. No markdown fences, no explanation.
+```
+
+**Parse all 3 agent results**: Extract the JSON from each response. If an agent returns invalid JSON or fails, log the failure and continue with whatever agents succeeded. The synthesis step works with partial input.
+
+#### Step 3e: Synthesis (Opus, inline)
+
+Read the 3 agent outputs (~15K total) + panel_text (~2K) + scaffold. Produce two things:
+
+##### 1. Enriched artifact list
+
+For each scaffold item (and new items from Substance enrichments), merge dimensional data from all three agents:
+
+- **From Substance**: enrichments (evidence, tradeoffs, context, open_questions, confidence), priorities, dependencies, events
+- **From Dynamics**: conviction strength for relevant items, tone context, speaker dynamics
+- **From Continuity**: evolution context (does this item supersede or reinforce a previous position?)
+
+Each merged artifact gets:
+- `category`: from scaffold (or Substance for new items)
+- `title`: from scaffold (or Substance)
+- `content`: synthesized from scaffold brief + Substance context + Continuity evolution
+- `context`: from Substance enrichment
+- `rationale`: synthesized from Substance tradeoffs + Dynamics conviction context
+- `tradeoffs`: from Substance
+- `confidence`: mapped from Substance `confidence_tag` — strong_agreement=0.9, data_backed=0.9, single_speaker=0.7, exploratory=0.5, contentious=0.6
+- `speaker`: from Substance enrichment
+- `open_questions`: from Substance enrichment
+- `evidence_quote`: from Substance enrichment
+- `panel_corroborated`: true if from scaffold, false if new from Substance
+- `topics`: 2-5 tags derived from content
+- `conviction_strength`: from Dynamics (assertion/hypothesis/exploration/null)
+- `conviction_challenged`: from Dynamics tension_points (boolean)
+- `urgency`: from Substance priorities (high/medium/low/null)
+- `importance`: from Substance priorities (high/medium/low/null)
+- `evolution_type`: from Continuity (new/shifted/reinforced/reversed/null)
+- `evolution_context`: from Continuity (what it supersedes/reinforces)
+- `related_extracts`: cross-references between items (array of {id, relationship})
+
+Separate **action items** from knowledge artifacts. Actions don't become Artifact files.
+
+##### 2. Meeting Intelligence Briefing
+
+Synthesize all agent outputs into a coherent briefing document. The **Meta-Analysis** section is the most important part — it justifies the pipeline's existence. It's what a reader gets that they wouldn't from skimming the transcript or reading the artifact list.
+
+**Meta-Analysis synthesis guidance:**
+
+Write 3-5 paragraphs of opinionated analysis. Not a summary — a reading of the meeting that tells someone something they wouldn't have figured out on their own.
+
+Structure around four lenses:
+
+1. **Heart of the conversation.** Not the agenda — the gravitational center. What were people circling, building toward, or working through? What question was actually being answered, even if nobody framed it that way? First paragraph, get there fast.
+
+2. **What's new.** What emerged that wasn't obvious going in? A shift in thinking, a constraint that surfaced, a convergence nobody declared. If nothing genuinely new emerged, say so — "execution meeting, no new ground" is a valid and useful finding. Don't manufacture novelty.
+
+3. **Actuality frame.** This is where cross-meeting context earns its keep. Given what we know about the team's current state — active quests, recent decisions, open threads from previous meetings, where work has been progressing — where does this meeting land? What does it change, accelerate, or block in the current reality? Connect the meeting's outcomes to the live state of the organization. Reference specific quests, prior decisions, or open threads by name when relevant. If the Continuity Analyst found evolution or recurrence, weave it in here.
+
+4. **Recommended considerations.** Sharp, specific. Not "continue exploring X" — what concretely should happen, who should act, and why it matters now. Distinguish between urgent (blocks other work) and important (shapes direction). If the meeting surfaced tensions without resolving them, name what needs resolving and by whom.
+
+**Register:** A trusted colleague who attended the meeting and is briefing someone who wasn't there. Direct, opinionated, doesn't waste words on obvious things. Prioritizes insight over completeness.
+
+**Anti-patterns:**
+- "The meeting covered several important topics..." → you have nothing to say
+- Restating what's already in the artifact list → the list exists for that
+- Equal weight to everything discussed → prioritize ruthlessly
+- "It would be good to follow up on..." → who, what, by when, or don't say it
+- Ignoring graph context → the actuality frame is what distinguishes this from any summary tool
+- Burying the lead → heart of the conversation goes first, not last
+
+```markdown
+# Meeting Intelligence: {Title}
+
+**Date**: YYYY-MM-DD
+**Attendees**: {names}
+**Source**: Granola ({doc-id})
+**Tone**: {tone description} | Alignment: {score}
+
+## Meta-Analysis
+
+{3-5 paragraphs — heart of the conversation, what's new, actuality frame, recommended considerations. See guidance above.}
+
+## Tone & Energy
+
+{From Dynamics agent}
+- Overall: {tone description}
+- Arc: {toneArc}
+- Key moments:
+  - {moment}: "{quote}" — {speaker}
+
+## Priorities
+
+{From Substance agent}
+| Item | Urgency | Importance | Owner | Evidence |
+|------|---------|------------|-------|----------|
+| ... | high | high | them | "quote" |
+
+## Dependencies
+
+{From Substance agent}
+- {blocker} → {blocked} ({owner})
+
+## Dynamics
+
+{From Dynamics agent}
+- Pattern: {pattern description}
+- Alignment: {score}
+- Tensions: {if any}
+
+## Convictions
+
+{From Dynamics agent}
+| Statement | Speaker | Strength | Evidence |
+|-----------|---------|----------|----------|
+| ... | me | assertion | "quote" |
+
+## Decision Evolution
+
+{From Continuity agent — only if cross-meeting data exists}
+- **{topic}**: {previous} → {current} ({trajectory})
+
+## Cross-Meeting Patterns
+
+{From Continuity agent — only if patterns found}
+- {topic}: discussed {N}x, {trajectory description}
+
+## Internal Tensions
+
+{Where analytical lenses DISAGREE — this section is critical signal}
+When Opus detects contradictions between agents (e.g., Substance says high confidence but Dynamics reads exploratory tone), record the tension explicitly:
+- **{topic}**: {Agent A reads as X}, but {Agent B reads as Y} — {implication}
+
+If no inter-agent tensions exist, omit this section.
+
+## Artifacts Extracted
+
+{List of artifacts with confidence + quest links}
+
+## Open Threads
+
+{Unresolved items carried forward — from Substance open_questions + Continuity open_threads}
+```
+
+##### 3. Detect inter-agent tensions
+
+Specifically look for these contradiction patterns:
+- Substance says "strong_agreement" but Dynamics reads low alignment → tension
+- Substance says "data_backed" but Dynamics reads "exploratory" tone → tension
+- Continuity says "reinforced" but Substance extracted a contradicting position → tension
+- Dynamics reads high energy/conviction but Substance found no supporting evidence → tension
+
+Record these in the "Internal Tensions" section. These disagreements ARE signal — they mark where stated intentions diverge from actual energy.
+
+#### Step 3f: Present proposal (enhanced format)
+
+Show the meta-analysis preview + merged extractions. The preview is 2-3 sentences from the meta-analysis — the "heart" and "what's new" lenses only, condensed. Full meta-analysis goes in the briefing file.
 
 ```
 From "Weekly Sync — Feb 12" (Bob + Alice):
@@ -692,7 +1033,7 @@ Add SUPERSEDES relationship if reflection produced one:
 }
 ```
 
-Execute the batch:
+Execute the entire batch:
 ```bash
 bash bin/graph-batch.sh '[{...}, {...}, ...]'
 ```
@@ -701,13 +1042,13 @@ Show progress:
 ```
 Creating artifacts...
 
-  [1/5] Writing meetings/2026-02-12-weekly-sync.md (intelligence briefing)
-  [2/5] Writing knowledge/decisions/2026-02-12-use-stdio-mcp-transport.md
-        Writing knowledge/findings/2026-02-12-onboarding-needs-guided-tour.md
-        Writing knowledge/findings/2026-02-12-usage-based-gating.md
-  [3/5] Indexed in knowledge graph (batch: 12 queries)
-  [4/5] Linked to 2 quests
-  [5/5] Auto-saved
+[1/6] ✓ Writing meetings/2026-02-12-weekly-sync.md (intelligence briefing)
+  [2/6] ✓ Writing knowledge/decisions/2026-02-12-use-stdio-mcp-transport.md
+        ✓ Writing knowledge/findings/2026-02-12-onboarding-needs-guided-tour.md
+        ✓ Writing knowledge/findings/2026-02-12-usage-based-gating.md
+  [3/5] ✓ Indexed in knowledge graph (batch: 12 queries)
+  [4/5] ✓ Linked to 2 quests
+  [5/5] ✓ Auto-saved
 ```
 
 ### Step 12: Mark processed
