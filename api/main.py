@@ -31,7 +31,7 @@ from .models import (
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
     HostingProvision, HostingUser, UserKeysUpdate,
-    GoogleOAuthCallback, GooglePromote,
+    GoogleOAuthCallback, GooglePromote, ScribeSummarize,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -4817,6 +4817,133 @@ async def google_promote(
 
 
 # =============================================================================
+# WEBHOOKS — GitHub PR lifecycle
+# =============================================================================
+
+
+@app.post("/webhooks/github")
+async def github_webhook(request: Request):
+    """Handle GitHub webhook events for PR lifecycle tracking.
+
+    Validates webhook signature, processes pull_request events,
+    updates PR nodes in the graph, and notifies authors on merge.
+    """
+    import hashlib
+    import hmac
+
+    webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+    body = await request.body()
+
+    # Validate signature if secret is configured
+    if webhook_secret:
+        sig_header = request.headers.get("x-hub-signature-256", "")
+        if not sig_header:
+            raise HTTPException(status_code=401, detail="Missing signature")
+        expected = "sha256=" + hmac.new(
+            webhook_secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+    event_type = request.headers.get("x-github-event", "")
+    if event_type != "pull_request":
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    action = payload.get("action", "")
+    pr = payload.get("pull_request", {})
+    pr_number = pr.get("number")
+    repo_full = payload.get("repository", {}).get("full_name", "")
+    repo_name = payload.get("repository", {}).get("name", "")
+    pr_user = pr.get("user", {}).get("login", "")
+    merged = pr.get("merged", False)
+
+    if not pr_number or not repo_name:
+        return {"status": "ignored", "reason": "missing pr data"}
+
+    # Only process closed events (merged or closed-without-merge)
+    if action != "closed":
+        return {"status": "ignored", "action": action}
+
+    status = "merged" if merged else "closed"
+    merged_at = pr.get("merged_at", "")
+
+    # Find the org that owns this repo by matching github_org
+    org_owner = payload.get("repository", {}).get("owner", {}).get("login", "")
+    target_org = None
+    for slug, org_cfg in ORG_CONFIGS.items():
+        if org_cfg.get("github_org", "").lower() == org_owner.lower():
+            target_org = org_cfg
+            break
+
+    if not target_org:
+        # Try Supabase if available
+        if USE_SUPABASE:
+            try:
+                from .services.supabase import get_org_by_github
+                target_org = get_org_by_github(org_owner)
+            except Exception:
+                pass
+
+    if not target_org:
+        return {"status": "ignored", "reason": f"unknown org: {org_owner}"}
+
+    # Update PR node in graph
+    try:
+        update_params = {"num": pr_number, "repo": repo_name, "status": status}
+        if merged_at:
+            update_query = """
+                MERGE (pr:PR {number: toInteger($num), repo: $repo})
+                ON CREATE SET pr.author = $author, pr.createdAt = datetime()
+                SET pr.status = $status, pr.mergedAt = datetime($mergedAt)
+                RETURN pr.number AS number, pr.status AS status
+            """
+            update_params["mergedAt"] = merged_at
+            update_params["author"] = pr_user
+        else:
+            update_query = """
+                MERGE (pr:PR {number: toInteger($num), repo: $repo})
+                ON CREATE SET pr.author = $author, pr.createdAt = datetime()
+                SET pr.status = $status
+                RETURN pr.number AS number, pr.status AS status
+            """
+            update_params["author"] = pr_user
+
+        await execute_query(target_org, update_query, update_params)
+    except Exception as e:
+        logger.error(f"Webhook: failed to update PR node: {e}")
+        # Don't fail the webhook — graph write is best-effort
+
+    # Notify the PR author on merge
+    if status == "merged":
+        try:
+            # Map GitHub username to Person name in graph
+            person_query = """
+                MATCH (p:Person {github: $github})
+                RETURN p.name AS name
+            """
+            person_result = await execute_query(
+                target_org, person_query, {"github": pr_user}
+            )
+            person_name = None
+            if person_result.get("values"):
+                person_name = person_result["values"][0][0]
+
+            if person_name:
+                msg = f"Your PR #{pr_number} was merged to {repo_name} ✓"
+                await send_message(target_org, person_name, msg)
+        except Exception as e:
+            logger.error(f"Webhook: failed to notify on merge: {e}")
+            # Don't fail — notification is best-effort
+
+    return {"status": "processed", "pr": pr_number, "action": status}
+
+
+# =============================================================================
 # HEALTH
 # =============================================================================
 
@@ -4853,6 +4980,25 @@ async def admin_debug(admin_user: str = Depends(validate_admin_github_token)):
         except Exception as e:
             results["neo4j_sessions"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     return results
+
+
+# =============================================================================
+# SPIRITS
+# =============================================================================
+
+
+@app.post("/api/spirits/scribe")
+async def spirits_scribe(body: ScribeSummarize, org: dict = Depends(validate_api_key)):
+    """Scribe spirit: summarize an artifact using Claude."""
+    from .services.scribe import summarize_artifact
+    try:
+        summary = await summarize_artifact(body.title, body.content, body.type)
+        return {"summary": summary}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("[SCRIBE] Error summarizing '%s': %s", body.title, e)
+        raise HTTPException(status_code=500, detail="Summarization failed")
 
 
 if __name__ == "__main__":

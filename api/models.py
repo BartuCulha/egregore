@@ -214,3 +214,9 @@ class GooglePromote(BaseModel):
     topics: list[str] = []
     mentioned_people: list[str] = []
     related_quests: list[str] = []
+
+
+class ScribeSummarize(BaseModel):
+    title: str
+    content: str
+    type: str = "document"
