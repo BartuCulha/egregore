@@ -16,14 +16,7 @@ set -euo pipefail
 #   transcripts:            { doc_id: [{ text, start_timestamp, end_timestamp, source, ... }] }
 
 CACHE_DIR="$HOME/Library/Application Support/Granola"
-# Try newest cache version first, fall back to older
-if [ -f "$CACHE_DIR/cache-v4.json" ]; then
-  CACHE_FILE="$CACHE_DIR/cache-v4.json"
-elif [ -f "$CACHE_DIR/cache-v3.json" ]; then
-  CACHE_FILE="$CACHE_DIR/cache-v3.json"
-else
-  CACHE_FILE="$CACHE_DIR/cache-v4.json"  # will fail with clear error in check_cache
-fi
+CACHE_FILE="$CACHE_DIR/cache-v3.json"
 
 # --- Helpers ---
 
@@ -39,13 +32,7 @@ check_cache() {
 }
 
 get_state() {
-  # v4: cache.state is a nested object → jq '.cache.state' works directly
-  # v3: cache is a stringified JSON string → need jq -r '.cache' | jq '.state'
-  if [[ "$CACHE_FILE" == *"cache-v4"* ]]; then
-    jq '.cache.state' "$CACHE_FILE"
-  else
-    jq -r '.cache' "$CACHE_FILE" | jq '.state'
-  fi
+  jq -r '.cache' "$CACHE_FILE" | jq '.state'
 }
 
 # --- Subcommands ---

@@ -379,14 +379,8 @@ setup_develop() {
   # Sync develop (without checkout — safe for concurrent sessions)
   CURRENT_BRANCH=$(git branch --show-current)
 
-  # Update local develop ref from remote without switching branches.
-  # fetch develop:develop only works for fast-forward updates.
-  # If local develop has diverged (e.g. from auto-update commits that also
-  # landed through PRs), force-reset to origin/develop — origin is canonical.
-  if ! git fetch origin develop:develop --quiet 2>/dev/null; then
-    # Diverged — force local develop to match origin
-    git update-ref refs/heads/develop refs/remotes/origin/develop 2>/dev/null || true
-  fi
+  # Update local develop ref from remote without switching branches
+  git fetch origin develop:develop --quiet 2>/dev/null || true
   DEVELOP_SYNCED="true"
 
   # Count commits on develop ahead of main
@@ -423,11 +417,8 @@ setup_develop() {
     # Switch to develop (already updated by fetch origin develop:develop above)
     git checkout develop --quiet 2>/dev/null || true
   else
-    # Already on develop — fetch couldn't update it (checked-out branch), so pull.
-    # If ff-only fails (diverged), hard-reset — origin/develop is always canonical.
-    if ! git merge --ff-only origin/develop --quiet 2>/dev/null; then
-      git reset --hard origin/develop --quiet 2>/dev/null || true
-    fi
+    # Already on develop — fetch couldn't update it (checked-out branch), so pull
+    git merge --ff-only origin/develop --quiet 2>/dev/null || true
   fi
 
   BRANCH="develop"
@@ -748,7 +739,7 @@ fi
     MATCH (s:Session)-[:BY]->(p:Person {github: \$gh})
     WHERE s.wrappedAt IS NOT NULL
     RETURN toString(s.wrappedAt) AS t
-ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
+    ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
   " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null | jq -r '.values[0][0] // empty' 2>/dev/null)
   if [ -z "$LAST_END" ]; then
     LAST_END="$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo '2026-03-03')T00:00:00Z"
@@ -880,31 +871,19 @@ fi
 # Auto-apply upstream framework updates (bin/, .claude/commands/, CLAUDE.md, skills/)
 # Only update when upstream has NEW commits we don't have (forward-only).
 # git log HEAD..upstream/main shows commits in upstream that aren't in our history.
-#
-# IMPORTANT: Never auto-commit on develop. Auto-update commits on develop create
-# divergence when the same changes also land through PRs (different SHAs, same
-# content). This causes silent sync failures on every subsequent session start.
-# On develop, just show the hint. On working branches, auto-apply is safe because
-# the branch will be PR-merged anyway.
 UPSTREAM_NEW=$(git log HEAD..upstream/main --oneline -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
 if [ -n "$UPSTREAM_NEW" ]; then
   UPDATE_COUNT=$(echo "$UPSTREAM_NEW" | wc -l | tr -d ' ')
-  CURRENT_FOR_UPDATE=$(git branch --show-current 2>/dev/null || echo "")
-  if [ "$CURRENT_FOR_UPDATE" = "develop" ] || [ "$CURRENT_FOR_UPDATE" = "main" ]; then
-    # Never auto-commit to shared branches — show hint instead
+  # Check for uncommitted local changes to framework files (protects active development)
+  LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
+  if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
     echo "  ⟳ Framework update available — run /update"
+  elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
+    git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
+    git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+    echo "  ✓ Framework updated"
   else
-    # On a working branch — safe to auto-apply
-    LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-    if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
-      echo "  ⟳ Framework update available — run /update"
-    elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
-      git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
-      git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-      echo "  ✓ Framework updated"
-    else
-      echo "  ⟳ Framework update available — run /update"
-    fi
+    echo "  ⟳ Framework update available — run /update"
   fi
 fi
 
