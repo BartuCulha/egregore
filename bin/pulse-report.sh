@@ -12,7 +12,7 @@ NOTIFY="$SCRIPT_DIR/bin/notify.sh"
 TELEMETRY="$SCRIPT_DIR/bin/telemetry.sh"
 PULSE_LOG="$SCRIPT_DIR/.pulse/runs.jsonl"
 DAYS="${1:-7}"
-RECIPIENT="${2:-cemfd}"
+RECIPIENT="${2:-cem}"
 
 if [ ! -f "$PULSE_LOG" ] || [ ! -s "$PULSE_LOG" ]; then
   echo "No pulse data yet."
