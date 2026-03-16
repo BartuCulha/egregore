@@ -1582,13 +1582,14 @@ def is_allowed(update: Update) -> bool:
     return chat_id in ALLOWED_CHAT_IDS or user_id in ALLOWED_CHAT_IDS or chat_id in ORG_CONFIG
 
 
-def resolve_org_for_dm(telegram_id: int) -> Optional[dict]:
-    """For DMs, find the org a user belongs to by checking Person nodes across all orgs."""
+def resolve_orgs_for_dm(telegram_id: int) -> list[dict]:
+    """For DMs, find all orgs a user belongs to by checking Person nodes across all orgs."""
+    matches = []
     for cid, cfg in ORG_CONFIG.items():
         name = lookup_person_by_telegram_id(telegram_id, org_config=cfg)
         if name:
-            return cfg
-    return None
+            matches.append(cfg)
+    return matches
 
 
 async def handle_question(update: Update, context, question: str, org_config: dict = None) -> None:
@@ -1984,9 +1985,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         if update.effective_user and GRAPH_AVAILABLE:
-            org_config = resolve_org_for_dm(update.effective_user.id)
-            if org_config:
-                await handle_question(update, context, text, org_config=org_config)
+            # Check if user already selected an org this session
+            dm_org = context.user_data.get("dm_org") if context.user_data else None
+            if dm_org:
+                await handle_question(update, context, text, org_config=dm_org)
+                return
+
+            # /switch command to change org
+            if text.lower().startswith("/switch"):
+                if context.user_data:
+                    context.user_data.pop("dm_org", None)
+                orgs = resolve_orgs_for_dm(update.effective_user.id)
+                if len(orgs) > 1:
+                    names = "\n".join(f"  {i+1}. {cfg['name']}" for i, cfg in enumerate(orgs))
+                    await update.message.reply_text(f"Which egregore?\n{names}\n\nReply with the number.")
+                    context.user_data["dm_org_choices"] = orgs
+                    return
+                elif orgs:
+                    context.user_data["dm_org"] = orgs[0]
+                    await update.message.reply_text(f"Switched to {orgs[0]['name']}.")
+                    return
+
+            # Check if user is picking from a list
+            choices = context.user_data.get("dm_org_choices") if context.user_data else None
+            if choices and text.strip().isdigit():
+                idx = int(text.strip()) - 1
+                if 0 <= idx < len(choices):
+                    context.user_data["dm_org"] = choices[idx]
+                    context.user_data.pop("dm_org_choices", None)
+                    await update.message.reply_text(f"Talking to {choices[idx]['name']}. Send /switch to change.")
+                    return
+
+            # Find all orgs user belongs to
+            orgs = resolve_orgs_for_dm(update.effective_user.id)
+            if len(orgs) > 1:
+                names = "\n".join(f"  {i+1}. {cfg['name']}" for i, cfg in enumerate(orgs))
+                await update.message.reply_text(f"You're in {len(orgs)} egregores:\n{names}\n\nReply with the number.")
+                context.user_data["dm_org_choices"] = orgs
+                return
+            elif orgs:
+                context.user_data["dm_org"] = orgs[0]
+                await handle_question(update, context, text, org_config=orgs[0])
                 return
 
         await update.message.reply_text(
