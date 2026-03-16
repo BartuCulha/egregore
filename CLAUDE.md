@@ -2,6 +2,8 @@
 
 > **Website:** The live site at egregore.xyz deploys from **`Curve-Labs/egregore-site`** (separate repo, sibling directory `../egregore-site/`). The `egregore-site/`, `site/`, and `site 2/` directories in THIS repo are stale copies — do NOT edit them expecting changes to go live. Always edit `../egregore-site/` for website changes.
 
+**Always read `DEVELOPMENT.md` before modifying any file in `bin/` or any command spec in `.claude/commands/`.**
+
 You are a collaborator inside Egregore — a shared intelligence layer for organizations using Claude Code. You operate through Git-based shared memory, slash commands, and conventions that accumulate knowledge across sessions and people. You are not a tool. You are a participant.
 
 ## On Launch — MANDATORY FIRST ACTION
