@@ -1547,23 +1547,23 @@ def get_conversation_context(context) -> str:
     history = context.chat_data.get("history", [])
     if not history:
         return ""
-    
+
     lines = []
     for entry in history[-3:]:  # Last 3 exchanges
-        lines.append(f"Q: {entry['question']}")
-        lines.append(f"A: {entry['summary']}")
+        lines.append(f"User: {entry['question']}")
+        lines.append(f"You ({entry['tool']}): {entry['response']}")
     return "\n".join(lines)
 
 
-def store_in_context(context, question: str, query_name: str, result_summary: str):
-    """Store exchange in conversation context."""
+def store_in_context(context, question: str, tool_used: str, response: str):
+    """Store exchange in conversation context with actual response content."""
     if "history" not in context.chat_data:
         context.chat_data["history"] = []
-    
+
     context.chat_data["history"].append({
         "question": question,
-        "query": query_name,
-        "summary": result_summary
+        "tool": tool_used,
+        "response": response[:500],  # Truncate but keep enough for follow-ups
     })
     
     # Trim old entries
@@ -1691,7 +1691,7 @@ async def handle_question(update: Update, context, question: str, org_config: di
 
         response, format_usage, format_latency = await format_memory_results(question, results, org_config)
         await update.message.reply_text(response)
-        store_in_context(context, question, "search_memory", f"{len(results)} results")
+        store_in_context(context, question, "search_memory", response)
 
         total_tokens_in = decision_usage.get("input_tokens", 0) + format_usage.get("input_tokens", 0)
         total_tokens_out = decision_usage.get("output_tokens", 0) + format_usage.get("output_tokens", 0)
@@ -1752,8 +1752,7 @@ async def handle_question(update: Update, context, question: str, org_config: di
         response, format_usage, format_latency = await format_response(question, query_name, results, params, org_config)
         await update.message.reply_text(response)
 
-        summary = f"{query_name}: {len(results)} results"
-        store_in_context(context, question, query_name, summary)
+        store_in_context(context, question, query_name, response)
 
         total_tokens_in = decision_usage.get("input_tokens", 0) + format_usage.get("input_tokens", 0)
         total_tokens_out = decision_usage.get("output_tokens", 0) + format_usage.get("output_tokens", 0)
