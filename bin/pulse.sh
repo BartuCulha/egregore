@@ -206,35 +206,8 @@ if [ -n "$BRIEF" ] && [ "$BRIEF" != "null" ]; then
   bash "$GS" query "$BRIEF_CYPHER" "$BRIEF_PARAMS" 2>/dev/null || true
 fi
 
-# --- 6. Process signals → notify ---
-SIGNAL_COUNT=0
-SIGNALS=$(echo "$RESPONSE" | jq -c '.signals // []')
-NUM_SIGNALS=$(echo "$SIGNALS" | jq 'length' 2>/dev/null || echo "0")
-
-for i in $(seq 0 $((NUM_SIGNALS - 1)) 2>/dev/null); do
-  TYPE=$(echo "$SIGNALS" | jq -r ".[$i].type" 2>/dev/null)
-  CONFIDENCE=$(echo "$SIGNALS" | jq -r ".[$i].confidence // 0" 2>/dev/null)
-  MESSAGE=$(echo "$SIGNALS" | jq -r ".[$i].message // empty" 2>/dev/null)
-  TOPIC=$(echo "$SIGNALS" | jq -r ".[$i].topic // empty" 2>/dev/null)
-
-  [ -z "$TYPE" ] || [ -z "$MESSAGE" ] && continue
-
-  # High threshold for notifications — trust is fragile, noisy alerts kill proactive systems
-  NOTIFY_THRESHOLD=0.85
-
-  case "$TYPE" in
-    convergence|tension)
-      ABOVE=$(echo "$CONFIDENCE >= $NOTIFY_THRESHOLD" | bc 2>/dev/null || echo "0")
-      if [ "$ABOVE" = "1" ]; then
-        PEOPLE=$(echo "$SIGNALS" | jq -r ".[$i].people[]?" 2>/dev/null)
-        for PERSON in $PEOPLE; do
-          bash "$NOTIFY" send "$PERSON" "Pulse: $MESSAGE" 2>/dev/null &
-        done
-      fi
-      SIGNAL_COUNT=$((SIGNAL_COUNT + 1))
-      ;;
-  esac
-done
+# --- 6. Count signals (notifications disabled for now) ---
+SIGNAL_COUNT=$(echo "$RESPONSE" | jq '.signals | length' 2>/dev/null || echo "0")
 
 # --- 7. Telemetry ---
 END_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || echo "0")
