@@ -1021,7 +1021,20 @@ QUERIES = {
                    recipient.name AS to_person
             ORDER BY a.date DESC
         """
-    }
+    },
+    "my_todos": {
+        "description": "Get open/active todo items for a person. Use for 'my todos', 'what's on my list', 'what do I need to do'",
+        "params": ["name"],
+        "cypher": """
+            MATCH (t:Todo)-[:BY]->(p:Person {name: $name})
+            WHERE t.status IN ['open', 'blocked', 'deferred']
+            OPTIONAL MATCH (t)-[:PART_OF]->(q:Quest)
+            RETURN t.text AS text, t.priority AS priority, t.status AS status,
+                   t.created AS created, t.blockedBy AS blockedBy,
+                   t.deferredUntil AS deferredUntil, q.id AS quest
+            ORDER BY t.priority DESC, t.created DESC
+        """
+    },
 }
 
 
@@ -1084,11 +1097,11 @@ def build_tools_schema(graph_available: bool = True, memory_available: bool = Fa
     # Direct response tool (always available)
     tools.append({
         "name": "respond_directly",
-        "description": "Respond directly without querying. Use for greetings, explaining what egregore is, general conversation, or when no data lookup is needed.",
+        "description": "Respond directly without querying. Use for greetings, explaining what egregore is, general conversation, or when no data lookup is needed. IMPORTANT: plain text only, no markdown formatting.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "The response message"}
+                "message": {"type": "string", "description": "The response in plain text (no markdown, no bold, no bullets)"}
             },
             "required": ["message"]
         }
@@ -1174,7 +1187,8 @@ QUERY ROUTING:
 
 BEHAVIORAL RULES:
 - Conversational tone — like catching someone up over coffee
-- No markdown formatting, no emojis
+- NEVER use markdown: no **bold**, no *italic*, no bullet lists, no headers. This is Telegram, not a document. Write in plain sentences.
+- No emojis
 - Be specific — include names, dates, topics
 - Keep responses concise — 2-3 short paragraphs max
 - End with a casual follow-up when natural ("want details on any of those?")
