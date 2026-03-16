@@ -147,10 +147,17 @@ RESPONSE=$(curl -sf -X POST "${API_URL}/api/spirits/pulse" \
 
 # Validate JSON
 if ! echo "$RESPONSE" | jq -e '.edges' >/dev/null 2>&1; then
-  # Malformed response — log and exit
   bash "$TELEMETRY" emit "pulse_error" '{"error":"malformed_response"}' 2>/dev/null &
   exit 0
 fi
+
+# --- 3b. Store full response + payload for analysis ---
+PULSE_LOG_DIR="$SCRIPT_DIR/.pulse"
+mkdir -p "$PULSE_LOG_DIR" 2>/dev/null
+jq -n -c --arg sid "$SESSION_ID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson payload "$PAYLOAD" --argjson response "$RESPONSE" \
+  '{session_id: $sid, timestamp: $ts, payload: $payload, response: $response}' \
+  >> "$PULSE_LOG_DIR/runs.jsonl" 2>/dev/null
 
 # --- 4. Write edges to graph ---
 EDGE_COUNT=0
