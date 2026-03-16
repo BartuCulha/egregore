@@ -31,7 +31,7 @@ from .models import (
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
     HostingProvision, HostingUser, UserKeysUpdate,
-    GoogleOAuthCallback, GooglePromote, ScribeSummarize,
+    GoogleOAuthCallback, GooglePromote, ScribeSummarize, PulseSynthesize,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -4999,6 +4999,20 @@ async def spirits_scribe(body: ScribeSummarize, org: dict = Depends(validate_api
     except Exception as e:
         logger.error("[SCRIBE] Error summarizing '%s': %s", body.title, e)
         raise HTTPException(status_code=500, detail="Summarization failed")
+
+
+@app.post("/api/spirits/pulse")
+async def spirits_pulse(body: PulseSynthesize, org: dict = Depends(validate_api_key)):
+    """Pulse spirit: post-session synthesis using Haiku."""
+    from .services.pulse import synthesize_session
+    try:
+        result = await synthesize_session(body.dict())
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("[PULSE] Error synthesizing session '%s': %s", body.session_id, e)
+        raise HTTPException(status_code=500, detail="Pulse synthesis failed")
 
 
 if __name__ == "__main__":
