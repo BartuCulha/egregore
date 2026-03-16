@@ -31,7 +31,7 @@ from .models import (
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
     HostingProvision, HostingUser, UserKeysUpdate,
-    GoogleOAuthCallback, GooglePromote, ScribeSummarize, PulseSynthesize,
+    GoogleOAuthCallback, GooglePromote, ScribeSummarize, PulseSynthesize, PulseReport,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
 from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
@@ -5013,6 +5013,20 @@ async def spirits_pulse(body: PulseSynthesize, org: dict = Depends(validate_api_
     except Exception as e:
         logger.error("[PULSE] Error synthesizing session '%s': %s", body.session_id, e)
         raise HTTPException(status_code=500, detail="Pulse synthesis failed")
+
+
+@app.post("/api/spirits/pulse-report")
+async def spirits_pulse_report(body: PulseReport, org: dict = Depends(validate_api_key)):
+    """Pulse weekly report: deep synthesis of a week's runs."""
+    from .services.pulse_report import synthesize_report
+    try:
+        report = await synthesize_report(body.runs, body.period_days)
+        return {"report": report}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("[PULSE-REPORT] Error: %s", e)
+        raise HTTPException(status_code=500, detail="Pulse report synthesis failed")
 
 
 if __name__ == "__main__":

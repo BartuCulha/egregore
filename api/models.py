@@ -234,3 +234,8 @@ class PulseSynthesize(BaseModel):
     other_sessions: list[dict] = []
     active_quests: list[dict] = []
     obs_raw: list[str] = []  # raw observation lines for deep analysis
+
+
+class PulseReport(BaseModel):
+    runs: list[dict]  # full {session_id, timestamp, payload, response} objects
+    period_days: int = 7
