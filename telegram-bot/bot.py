@@ -1,12 +1,12 @@
 """
 Egregore Bot
 
-A Telegram bot that answers natural language queries about Egregore
-by querying the Neo4j knowledge graph directly.
+A Telegram bot that serves as the voice of an egregore — answering
+questions about team activity, decisions, and knowledge by querying
+the Neo4j graph and searching the shared memory repo.
 
-Uses LLM (Haiku) to:
-1. Parse questions and pick the right query
-2. Format results as natural language
+Uses LLM (Sonnet) with tool use to route questions to the right
+data source and format responses conversationally.
 
 Deploy to Railway with webhook mode for production.
 """
@@ -16,7 +16,10 @@ import json
 import logging
 import time
 import re
+import subprocess
+import asyncio
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from analytics import log_query_event, log_event
@@ -38,17 +41,6 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 import uvicorn
 
-# MCP server - import safely
-try:
-    from mcp_server import get_mcp_routes
-    MCP_ENABLED = True
-except Exception as e:
-    import logging
-    logging.error(f"MCP server import failed: {e}")
-    MCP_ENABLED = False
-    def get_mcp_routes():
-        return []
-
 # =============================================================================
 # CONFIG
 # =============================================================================
@@ -69,8 +61,9 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 # GitHub token for adding collaborators
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-# Anthropic (for Haiku)
+# Anthropic LLM
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-20250514")
 
 # Spirit adapter admin secret (required for /spirit/init)
 SPIRIT_ADMIN_SECRET = os.environ.get("SPIRIT_ADMIN_SECRET", "")
@@ -106,7 +99,7 @@ ORG_CONFIG = {
         "neo4j_uri": os.environ.get("NEO4J_URI", ""),
         "neo4j_user": os.environ.get("NEO4J_USER", "neo4j"),
         "neo4j_password": os.environ.get("NEO4J_PASSWORD", ""),
-        "mcp_api_key": os.environ.get("CURVELABS_MCP_KEY", "ek_curvelabs_default"),
+        "github_org": "Curve-Labs",
         "_static": True,
     },
 }
@@ -118,7 +111,6 @@ if EGREGORE_CHANNEL_ID:
         "neo4j_uri": EGREGORE_NEO4J_URI,
         "neo4j_user": EGREGORE_NEO4J_USER,
         "neo4j_password": EGREGORE_NEO4J_PASSWORD,
-        "mcp_api_key": os.environ.get("EGREGORE_MCP_KEY", "ek_egregore_default"),
     }
 
 
@@ -162,7 +154,7 @@ def load_dynamic_orgs():
                         "neo4j_uri": neo4j_uri,
                         "neo4j_user": org.get("neo4j_user", "neo4j"),
                         "neo4j_password": org.get("neo4j_password", ""),
-                        "mcp_api_key": "",  # API keys are validated server-side
+                        "github_org": org.get("github_org", ""),
                     }
                     if chat_id not in ALLOWED_CHAT_IDS:
                         ALLOWED_CHAT_IDS.append(chat_id)
@@ -244,15 +236,12 @@ def _load_orgs_from_neo4j():
                     existing = ORG_CONFIG[chat_id]
                     if existing.get("_static"):
                         continue
-                    if not record.get("api_key") and existing.get("mcp_api_key"):
-                        continue
                     logger.info(f"Replacing org {existing.get('name')} with {org_id} for chat {chat_id}")
                 ORG_CONFIG[chat_id] = {
                     "name": org_id,
                     "neo4j_uri": shared_uri,
                     "neo4j_user": shared_user,
                     "neo4j_password": shared_password,
-                    "mcp_api_key": record.get("api_key", ""),
                 }
                 if chat_id not in ALLOWED_CHAT_IDS:
                     ALLOWED_CHAT_IDS.append(chat_id)
@@ -656,6 +645,185 @@ def get_org_team_names(org_config: dict = None) -> list:
 
 
 # =============================================================================
+# CAPABILITY FLAGS
+# =============================================================================
+
+GRAPH_AVAILABLE = False  # Set during startup
+MEMORY_AVAILABLE = False  # Set after memory clone attempt
+
+
+def check_graph_availability():
+    """Test if any Neo4j connection works."""
+    global GRAPH_AVAILABLE
+    for cid, cfg in ORG_CONFIG.items():
+        try:
+            driver = get_org_driver(cfg)
+            if driver:
+                with driver.session() as session:
+                    session.run("RETURN 1")
+                GRAPH_AVAILABLE = True
+                logger.info("Graph availability: OK")
+                return
+        except Exception:
+            continue
+    logger.warning("Graph availability: NONE — running in memory-only mode")
+
+
+# =============================================================================
+# MEMORY REPO
+# =============================================================================
+
+MEMORY_BASE_DIR = Path(os.environ.get("MEMORY_DIR", "/app/memory"))
+MEMORY_REPOS: dict[str, Path] = {}  # org_slug -> local path
+ORG_IDENTITIES: dict[str, str] = {}  # org_slug -> identity text (cached)
+
+
+def clone_memory_repo(org_slug: str, github_org: str) -> Optional[Path]:
+    """Clone or update memory repo for an org. Returns local path or None."""
+    if not GITHUB_TOKEN or not github_org:
+        return None
+
+    repo_dir = MEMORY_BASE_DIR / org_slug
+    repo_url = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{github_org}/{github_org}-memory.git"
+
+    try:
+        if repo_dir.exists() and (repo_dir / ".git").exists():
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "pull", "--quiet"],
+                capture_output=True, timeout=30
+            )
+            logger.info(f"Memory repo updated: {org_slug}")
+        else:
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "--quiet", repo_url, str(repo_dir)],
+                capture_output=True, timeout=60, check=True
+            )
+            logger.info(f"Memory repo cloned: {org_slug}")
+
+        MEMORY_REPOS[org_slug] = repo_dir
+        return repo_dir
+    except Exception as e:
+        logger.warning(f"Memory repo clone/pull failed for {org_slug}: {e}")
+        return None
+
+
+def init_memory_repos():
+    """Clone memory repos for all configured orgs on startup."""
+    global MEMORY_AVAILABLE
+    for cid, cfg in ORG_CONFIG.items():
+        org_slug = cfg.get("name", "")
+        github_org = cfg.get("github_org", "")
+        if org_slug and github_org:
+            clone_memory_repo(org_slug, github_org)
+    MEMORY_AVAILABLE = len(MEMORY_REPOS) > 0
+    logger.info(f"Memory repos initialized: {list(MEMORY_REPOS.keys())}")
+
+
+async def sync_memory_repos_background():
+    """Background task: pull all memory repos every 5 minutes."""
+    while True:
+        await asyncio.sleep(300)
+        for org_slug, repo_dir in MEMORY_REPOS.items():
+            try:
+                subprocess.run(
+                    ["git", "-C", str(repo_dir), "pull", "--quiet"],
+                    capture_output=True, timeout=30
+                )
+            except Exception as e:
+                logger.warning(f"Memory sync failed for {org_slug}: {e}")
+
+
+def search_memory(query: str, org_slug: str, max_results: int = 5) -> list[dict]:
+    """Search memory repo markdown files for relevant content."""
+    repo_dir = MEMORY_REPOS.get(org_slug)
+    if not repo_dir or not repo_dir.exists():
+        return []
+
+    query_lower = query.lower()
+    query_words = [w for w in query_lower.split() if len(w) > 2]
+    results = []
+
+    # Priority directories (searched first)
+    priority_dirs = ["knowledge/decisions", "knowledge/findings", "knowledge/patterns", "handoffs", "people"]
+
+    all_files = []
+    for pdir in priority_dirs:
+        full_dir = repo_dir / pdir
+        if full_dir.exists():
+            all_files.extend((f, True) for f in full_dir.rglob("*.md"))
+    # Add remaining files with lower priority
+    for f in repo_dir.rglob("*.md"):
+        if not any(str(f).startswith(str(repo_dir / pd)) for pd in priority_dirs):
+            all_files.append((f, False))
+
+    for file_path, is_priority in all_files:
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            content_lower = content.lower()
+
+            # Score: count matching query words
+            score = sum(1 for w in query_words if w in content_lower)
+            if score == 0:
+                continue
+
+            # Boost priority directories
+            if is_priority:
+                score += 2
+
+            # Extract title from first heading or filename
+            title = file_path.stem
+            for line in content.split("\n")[:5]:
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+
+            # Extract snippet around first match
+            snippet = ""
+            for word in query_words:
+                idx = content_lower.find(word)
+                if idx >= 0:
+                    start = max(0, idx - 100)
+                    end = min(len(content), idx + 200)
+                    snippet = content[start:end].replace("\n", " ").strip()
+                    if start > 0:
+                        snippet = "..." + snippet
+                    if end < len(content):
+                        snippet = snippet + "..."
+                    break
+
+            rel_path = str(file_path.relative_to(repo_dir))
+            results.append({"path": rel_path, "title": title, "snippet": snippet, "score": score})
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:max_results]
+
+
+def load_org_identity(org_slug: str) -> str:
+    """Load org identity text from memory repo (EGREGORE.md or soul.md)."""
+    if org_slug in ORG_IDENTITIES:
+        return ORG_IDENTITIES[org_slug]
+
+    repo_dir = MEMORY_REPOS.get(org_slug)
+    identity = ""
+
+    if repo_dir:
+        for fname in ["EGREGORE.md", "soul.md"]:
+            fpath = repo_dir / fname
+            if fpath.exists():
+                try:
+                    identity = fpath.read_text(encoding="utf-8", errors="ignore")[:2000]
+                    break
+                except Exception:
+                    pass
+
+    ORG_IDENTITIES[org_slug] = identity
+    return identity
+
+
+# =============================================================================
 # PREDEFINED QUERIES
 # =============================================================================
 
@@ -861,31 +1029,62 @@ QUERIES = {
 # LLM AGENT WITH TOOL USE
 # =============================================================================
 
-def build_tools_schema() -> list:
-    """Build Anthropic tools schema from QUERIES."""
+def build_tools_schema(graph_available: bool = True, memory_available: bool = False) -> list:
+    """Build Anthropic tools schema based on available capabilities."""
     tools = []
-    for name, q in QUERIES.items():
-        tool = {
-            "name": f"query_{name}",
-            "description": q["description"],
+
+    # Graph query tools (only if Neo4j is connected)
+    if graph_available:
+        for name, q in QUERIES.items():
+            tool = {
+                "name": f"query_{name}",
+                "description": q["description"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+            for param in q.get("params", []):
+                tool["input_schema"]["properties"][param] = {
+                    "type": "string",
+                    "description": f"The {param} (use lowercase for person names)"
+                }
+                tool["input_schema"]["required"].append(param)
+            tools.append(tool)
+
+        # Todo creation (requires graph)
+        tools.append({
+            "name": "create_todo",
+            "description": "Create a todo item for the person asking. Use when they say 'add to my todo', 'remind me to', 'don't let me forget', or express intent to track a task.",
             "input_schema": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "text": {"type": "string", "description": "The todo text (clean, actionable)"},
+                    "priority": {"type": "integer", "description": "0=none, 1=low, 2=medium, 3=high. Detect from language: urgent/critical/ASAP=3, soon/important=2, eventually/maybe=1, default=0"}
+                },
+                "required": ["text"]
             }
-        }
-        for param in q.get("params", []):
-            tool["input_schema"]["properties"][param] = {
-                "type": "string",
-                "description": f"The {param} (use lowercase for person names: oz, ali, cem)"
+        })
+
+    # Memory search (only if memory repo is cloned)
+    if memory_available:
+        tools.append({
+            "name": "search_memory",
+            "description": "Search the knowledge base — handoffs, decisions, findings, patterns, people profiles. Use for institutional knowledge, past decisions, context about why something was done, or information not captured in the activity graph.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search terms — use specific keywords related to the topic"}
+                },
+                "required": ["query"]
             }
-            tool["input_schema"]["required"].append(param)
-        tools.append(tool)
-    
-    # Direct response tool
+        })
+
+    # Direct response tool (always available)
     tools.append({
         "name": "respond_directly",
-        "description": "Respond directly without querying. Use for greetings, explaining how Egregore works, or when no data query is needed.",
+        "description": "Respond directly without querying. Use for greetings, explaining what egregore is, general conversation, or when no data lookup is needed.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -894,82 +1093,125 @@ def build_tools_schema() -> list:
             "required": ["message"]
         }
     })
-    
+
     return tools
+
+
+def build_system_prompt(
+    org_config: dict,
+    sender_name: str = None,
+    conversation_context: str = "",
+    today_str: str = None,
+    team_names: list = None,
+) -> str:
+    """Build the system prompt for the agent, layered by context."""
+    if not today_str:
+        today_str = date.today().isoformat()
+
+    org_slug = org_config.get("name", "default") if org_config else "default"
+
+    # Layer 1: Identity
+    org_identity = load_org_identity(org_slug)
+    if org_identity:
+        identity_block = f"""You are the voice of {org_slug}'s egregore — the shared intelligence that emerges from the team's collective work.
+
+Here is the organization's identity:
+{org_identity}
+
+You speak as a colleague who has been in every session and knows the full context."""
+    else:
+        identity_block = f"""You are the voice of {org_slug}'s egregore — the shared intelligence that emerges from the team's collective work. You know the people, the projects, the decisions. You speak like a colleague who's been in every session.
+
+An egregore is a shared intelligence layer for organizations — it gives teams persistent memory, async handoffs, and accumulated knowledge across sessions and people. The knowledge graph tracks sessions, quests, artifacts, projects, and people. The knowledge base stores decisions, findings, patterns, and handoffs as markdown."""
+
+    # Layer 2: Capabilities
+    capabilities = []
+    if GRAPH_AVAILABLE:
+        capabilities.append("- Activity graph: query sessions, quests, artifacts, projects, people, and handoffs")
+        capabilities.append("- Todo creation: create personal todo items for team members")
+    if MEMORY_AVAILABLE:
+        capabilities.append("- Knowledge base: search decisions, findings, patterns, handoffs, and people profiles")
+    cap_block = "\n".join(capabilities) if capabilities else "- Direct conversation only (no data sources connected)"
+
+    # Layer 3: Sender identity
+    sender_block = ""
+    if sender_name:
+        sender_block = f"""
+SENDER: The person asking is "{sender_name}".
+When they say "my", "I", "me", use name="{sender_name}" in queries."""
+
+    # Layer 4: Team context
+    team_line = ""
+    if team_names:
+        team_line = f"\nTEAM (use lowercase in queries): {', '.join(team_names)}"
+    else:
+        team_line = "\nTEAM: use query_all_people to discover team members"
+
+    # Layer 5: Conversation history
+    context_block = ""
+    if conversation_context:
+        context_block = f"\n\nCONVERSATION HISTORY:\n{conversation_context}\nUse this for follow-ups like 'which ones', 'tell me more', 'what about X', etc."
+
+    return f"""{identity_block}
+
+TODAY: {today_str}
+{sender_block}
+{team_line}
+
+YOUR CAPABILITIES:
+{cap_block}
+
+QUERY ROUTING:
+- "What is X working on?" / "What's X doing?" -> query_person_sessions (shows actual work, NOT query_person_projects)
+- "What's happening?" -> query_recent_activity
+- "What happened today?" -> query_activity_on_date(date="{today_str}")
+- "What did X do today?" -> query_person_sessions_on_date(name="x", date="{today_str}")
+- "Tell me about [quest]" -> query_quest_details or query_active_quests
+- "What did X hand off?" -> query_handoffs_from_person
+- Questions about decisions, patterns, or "why did we..." -> search_memory
+- "Add to my todo" / "remind me to" -> create_todo
+- Greetings, general questions, explanations -> respond_directly
+
+BEHAVIORAL RULES:
+- Conversational tone — like catching someone up over coffee
+- No markdown formatting, no emojis
+- Be specific — include names, dates, topics
+- Keep responses concise — 2-3 short paragraphs max
+- End with a casual follow-up when natural ("want details on any of those?")
+- Skip intros and preamble — everyone knows each other
+{context_block}"""
 
 
 async def agent_decide(question: str, conversation_context: str = "", sender_name: str = None, org_config: dict = None) -> dict:
     """LLM agent with tool use decides what to do.
 
     Returns dict with:
-        action: "respond" or "query"
+        action: "respond", "query", "search_memory", or "create_todo"
         message: (if respond) the response text
         query: (if query) the query name
-        params: (if query) the query parameters
+        params: (if query/search/todo) the parameters
         usage: {"input_tokens": int, "output_tokens": int}
         latency_ms: float
     """
     if not ANTHROPIC_API_KEY:
         return {"action": "respond", "message": "API not configured.", "usage": {}, "latency_ms": 0}
 
-    tools = build_tools_schema()
-
-    context_info = ""
-    if conversation_context:
-        context_info = f"\n\nPrevious context:\n{conversation_context}\n\nUse this to understand follow-ups like 'which ones', 'tell me more', etc."
-
-    # Identity context for "my" / "I" questions
-    sender_info = ""
-    if sender_name:
-        sender_info = f"""
-SENDER IDENTITY: The person asking this question is "{sender_name}".
-When they say "my", "I", "me", or ask about themselves, use name="{sender_name}" in queries.
-Examples for {sender_name}:
-- "What am I working on?" -> query_person_sessions(name="{sender_name}")
-- "My activity" -> query_person_sessions(name="{sender_name}")
-- "What have I done?" -> query_person_sessions(name="{sender_name}")
-- "My quests" -> query_person_quests(name="{sender_name}")
-- "What did I write?" -> query_person_artifacts(name="{sender_name}")
-"""
-
     today_str = date.today().isoformat()
+    team_names = get_org_team_names(org_config) if GRAPH_AVAILABLE else []
+    org_slug = org_config.get("name", "default") if org_config else "default"
 
-    # Dynamic org context — fetch team members from Neo4j
-    org_name = org_config.get("name", "default") if org_config else "default"
-    team_names = get_org_team_names(org_config)
-    team_line = f"TEAM (lowercase for queries): {', '.join(team_names)}" if team_names else "TEAM: query all_people to discover team members"
+    tools = build_tools_schema(
+        graph_available=GRAPH_AVAILABLE,
+        memory_available=org_slug in MEMORY_REPOS
+    )
 
-    system_prompt = f"""You are Egregore, the shared memory for {org_name} - an INTERNAL tool for team members.
-
-TODAY'S DATE: {today_str}
-When user says "today", use date parameter = "{today_str}"
-When user says "yesterday", use date parameter for the day before.
-
-IMPORTANT: Show ACTIVITY (sessions, quests, artifacts), not just project names.
-{sender_info}
-QUERY PRIORITY for "what is X working on?" or "what's X doing?":
-1. query_person_sessions - shows their recent actual work/activity
-2. query_person_quests - shows initiatives they're driving
-3. query_person_artifacts - shows what they've created
-
-DO NOT use query_person_projects for "working on" questions - it just shows repo assignments.
-
-DATE-SPECIFIC QUERIES:
-- "What happened today?" -> query_activity_on_date(date="{today_str}")
-- "What did X do today?" -> query_person_sessions_on_date(name="x", date="{today_str}")
-- "What did X handoff to Y?" -> query_handoffs_to_person(recipient="y") then filter by sender
-
-{team_line}
-{context_info}
-
-Examples:
-- "What is X working on?" -> query_person_sessions(name="x")
-- "What quests did X start?" -> query_person_quests(name="x")
-- "What has X written?" -> query_person_artifacts(name="x")
-- "What's happening?" -> query_recent_activity
-- "What's happening today?" -> query_activity_on_date(date="{today_str}")
-- "Tell me about [project]" -> query_project_details(name="project")
-- "What is Egregore?" -> respond_directly (brief explanation)"""
+    system_prompt = build_system_prompt(
+        org_config=org_config,
+        sender_name=sender_name,
+        conversation_context=conversation_context,
+        today_str=today_str,
+        team_names=team_names,
+    )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -982,13 +1224,13 @@ Examples:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 400,
+                    "model": LLM_MODEL,
+                    "max_tokens": 1024,
                     "system": system_prompt,
                     "tools": tools,
                     "messages": [{"role": "user", "content": question}]
                 },
-                timeout=15
+                timeout=30
             )
             latency_ms = (time.perf_counter() - start_time) * 1000
             resp.raise_for_status()
@@ -1010,6 +1252,12 @@ Examples:
 
                     if tool_name == "respond_directly":
                         return {"action": "respond", "message": tool_input.get("message", ""), "usage": usage_info, "latency_ms": latency_ms}
+
+                    if tool_name == "search_memory":
+                        return {"action": "search_memory", "params": tool_input, "usage": usage_info, "latency_ms": latency_ms}
+
+                    if tool_name == "create_todo":
+                        return {"action": "create_todo", "params": tool_input, "usage": usage_info, "latency_ms": latency_ms}
 
                     if tool_name.startswith("query_"):
                         query_name = tool_name[6:]
@@ -1076,15 +1324,15 @@ NO markdown, NO emojis."""
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 600,
+                    "model": LLM_MODEL,
+                    "max_tokens": 1500,
                     "system": system_prompt,
                     "messages": [{
                         "role": "user",
                         "content": f"Question: {question}\nQuery type: {query_name}\nData: {json.dumps(results, default=str)}"
                     }]
                 },
-                timeout=15
+                timeout=30
             )
             latency_ms = (time.perf_counter() - start_time) * 1000
             resp.raise_for_status()
@@ -1102,14 +1350,15 @@ NO markdown, NO emojis."""
             return f"Found {len(results)} results for {query_name}.", {}, 0
 
 
-async def generate_no_results_response(question: str, query_name: str, params: dict) -> str:
+async def generate_no_results_response(question: str, query_name: str, params: dict, org_config: dict = None) -> str:
     """Generate a helpful response when no results are found."""
     if not ANTHROPIC_API_KEY:
         return "Nothing in the graph for that yet. Try a different angle?"
 
+    org_name = org_config.get("name", "the team") if org_config else "the team"
     search_context = f"Query: {query_name}, Params: {params}"
-    
-    system_prompt = """You are Egregore, shared memory for Curve Labs. Talking to INTERNAL team members.
+
+    system_prompt = f"""You are the voice of {org_name}'s egregore. Talking to INTERNAL team members.
 A search returned no results. Keep it brief and casual:
 
 1. Quick acknowledgment (not apologetic)
@@ -1129,65 +1378,129 @@ NO markdown, NO emojis, NO formal language."""
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 300,
+                    "model": LLM_MODEL,
+                    "max_tokens": 800,
                     "system": system_prompt,
                     "messages": [{
                         "role": "user",
                         "content": f"User asked: {question}\n{search_context}\n\nNo results were found. Provide a helpful response."
                     }]
                 },
-                timeout=15
+                timeout=30
             )
             resp.raise_for_status()
             return resp.json()["content"][0]["text"]
         except Exception as e:
             logger.error(f"No results response failed: {e}")
-            return "No results found for that search. Try asking about team members (oz, ali, cem), projects (lace, tristero), or recent activity."
+            return "Nothing in the graph for that yet. Try asking about team activity, people, or quests."
 
 
 # =============================================================================
-# EGREGORE CONTEXT (for general questions)
+# TODO CREATION
 # =============================================================================
 
-EGREGORE_CONTEXT = """Egregore = our shared memory + async coordination system.
+async def handle_create_todo(text: str, priority: int, sender_name: str, org_config: dict) -> str:
+    """Create a Todo node in Neo4j. Returns confirmation message."""
+    if not sender_name:
+        return "I don't know who you are — can't create a todo without knowing the owner."
 
-The concept: collective intelligence that emerges from shared focus (thoughtform/group mind).
-The system: Neo4j graph connecting people, projects, quests, artifacts. This bot queries it.
+    today = date.today().isoformat()
 
-Quick reference:
-- Quests: ongoing explorations (NLNet grant, evaluation benchmark, etc.)
-- Artifacts: content we create (blog posts, decisions, findings)
-- Sessions: daily work logs
+    # Get next sequence number
+    count_results = run_org_query(
+        "MATCH (t:Todo)-[:BY]->(p:Person {name: $name}) WHERE t.id STARTS WITH $prefix RETURN count(t) AS count",
+        {"name": sender_name, "prefix": today},
+        org_config,
+    )
+    seq = (count_results[0]["count"] if count_results else 0) + 1
+    todo_id = f"{today}-{sender_name}-{seq:03d}"
 
-To add stuff: /add in Claude Code, then /save"""
+    # Extract topic words for quest matching
+    stop_words = {"the", "a", "an", "to", "for", "and", "or", "but", "in", "on", "at", "of", "is", "it", "my", "me", "i"}
+    topic_words = [w.lower() for w in re.split(r'\W+', text) if len(w) > 2 and w.lower() not in stop_words]
+
+    # Check for quest match
+    quest_id = None
+    if topic_words:
+        active_quests = run_org_query(
+            "MATCH (q:Quest {status: 'active'}) RETURN q.id AS id, q.title AS title",
+            {},
+            org_config,
+        )
+        for quest in active_quests:
+            qid = quest.get("id", "")
+            qtitle = quest.get("title", "")
+            quest_words = set(re.split(r'[\W_-]+', f"{qid} {qtitle}".lower()))
+            overlap = sum(1 for w in topic_words if w in quest_words)
+            if overlap >= 2 or qid in text.lower():
+                quest_id = qid
+                break
+
+    # Create the todo node
+    run_org_query(
+        """MATCH (p:Person {name: $name})
+        CREATE (t:Todo {id: $id, text: $text, status: 'open', created: datetime(),
+                        completed: null, priority: $priority, topics: $topics, source: 'telegram'})
+        CREATE (t)-[:BY]->(p)
+        RETURN t.id AS id""",
+        {"name": sender_name, "id": todo_id, "text": text, "priority": priority, "topics": topic_words},
+        org_config,
+    )
+
+    # Link to quest if matched
+    if quest_id:
+        run_org_query(
+            "MATCH (t:Todo {id: $tid}) MATCH (q:Quest {id: $qid}) CREATE (t)-[:PART_OF]->(q)",
+            {"tid": todo_id, "qid": quest_id},
+            org_config,
+        )
+
+    # Count open todos
+    count = run_org_query(
+        "MATCH (t:Todo)-[:BY]->(p:Person {name: $name}) WHERE t.status IN ['open', 'blocked', 'deferred'] RETURN count(t) AS count",
+        {"name": sender_name},
+        org_config,
+    )
+    open_count = count[0]["count"] if count else "?"
+
+    quest_note = f" (linked to {quest_id})" if quest_id else ""
+    return f"Added: {text}{quest_note}. {open_count} open todos."
 
 
-# Legacy team info - only used as fallback for CL default org
-TEAM_INFO = {
-    "oz": "lace, tristero, infrastructure - architecture side",
-    "ali": "infrastructure, deployment, this bot",
-    "cem": "research - emergent ontologies, evaluation frameworks",
-    "pali": "operations, coordination",
-    "damla": "design, product, user experience"
-}
+# =============================================================================
+# MEMORY SEARCH FORMATTING
+# =============================================================================
 
+async def format_memory_results(question: str, results: list[dict], org_config: dict = None) -> tuple:
+    """Format memory search results as conversational text via LLM.
 
-async def answer_general(question: str) -> str:
-    """Answer general questions about Egregore (not data queries)."""
+    Returns tuple of (response_text, usage_dict, latency_ms)
+    """
+    if not results:
+        return "Nothing in the knowledge base for that. Try different keywords?", {}, 0
+
     if not ANTHROPIC_API_KEY:
-        return "I can answer questions about Egregore activity. Try: What's happening?"
+        lines = [f"- {r['title']}: {r['snippet'][:100]}" for r in results]
+        return "Found in knowledge base:\n" + "\n".join(lines), {}, 0
 
-    system_prompt = f"""You are Egregore, a living organization where humans and AI collaborate.
+    org_name = org_config.get("name", "the team") if org_config else "the team"
+    results_text = "\n\n".join(
+        f"### {r['title']} ({r['path']})\n{r['snippet']}" for r in results
+    )
 
-{EGREGORE_CONTEXT}
+    system_prompt = f"""You are the voice of {org_name}'s egregore. Synthesize the knowledge base results into a conversational answer.
 
-Answer the user's question concisely. If it's about how Egregore works, explain briefly.
-If it seems like a data question but you couldn't match it, suggest rephrasing.
-Don't use emojis."""
+RULES:
+- Answer the question using the search results as context
+- Weave information naturally — don't just list what you found
+- Mention which document/decision the info comes from when relevant
+- If results are tangential, say so and suggest what else to try
+- Conversational tone, no markdown, no emojis
+- 2-3 short paragraphs max"""
 
     async with httpx.AsyncClient() as client:
         try:
+            start_time = time.perf_counter()
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -1196,25 +1509,38 @@ Don't use emojis."""
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 300,
+                    "model": LLM_MODEL,
+                    "max_tokens": 1500,
                     "system": system_prompt,
-                    "messages": [{"role": "user", "content": question}]
+                    "messages": [{
+                        "role": "user",
+                        "content": f"Question: {question}\n\nKnowledge base results:\n{results_text}"
+                    }]
                 },
-                timeout=15
+                timeout=30
             )
+            latency_ms = (time.perf_counter() - start_time) * 1000
             resp.raise_for_status()
-            return resp.json()["content"][0]["text"]
+            data = resp.json()
+
+            usage = data.get("usage", {})
+            usage_info = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0)
+            }
+
+            return data["content"][0]["text"], usage_info, latency_ms
         except Exception as e:
-            logger.error(f"General answer failed: {e}")
-            return "I can help with: activity, quests, projects, artifacts, people. Try asking 'What's happening?'"
+            logger.error(f"Memory format failed: {e}")
+            lines = [f"- {r['title']}: {r['snippet'][:100]}" for r in results]
+            return "Found in knowledge base:\n" + "\n".join(lines), {}, 0
 
 
 # =============================================================================
 # CONVERSATION CONTEXT
 # =============================================================================
 
-MAX_HISTORY = 5
+MAX_HISTORY = 8
 
 def get_conversation_context(context) -> str:
     """Get recent conversation history for follow-ups."""
@@ -1256,24 +1582,28 @@ def is_allowed(update: Update) -> bool:
     return chat_id in ALLOWED_CHAT_IDS or user_id in ALLOWED_CHAT_IDS or chat_id in ORG_CONFIG
 
 
-async def handle_question(update: Update, context, question: str) -> None:
+def resolve_org_for_dm(telegram_id: int) -> Optional[dict]:
+    """For DMs, find the org a user belongs to by checking Person nodes across all orgs."""
+    for cid, cfg in ORG_CONFIG.items():
+        name = lookup_person_by_telegram_id(telegram_id, org_config=cfg)
+        if name:
+            return cfg
+    return None
+
+
+async def handle_question(update: Update, context, question: str, org_config: dict = None) -> None:
     """Main question handler - agent decides what to do."""
 
-    # Get org config for this chat
+    # Get org config — passed in for DMs, otherwise from chat_id
     chat_id = update.effective_chat.id
-    org_config = ORG_CONFIG.get(chat_id)
+    if not org_config:
+        org_config = ORG_CONFIG.get(chat_id)
     if not org_config:
         await update.message.reply_text("This group isn't connected to an Egregore org yet. Ask your admin to add the bot through the setup flow.")
         return
 
     org_name = org_config.get("name", "default")
     logger.info(f"handle_question: chat_id={chat_id}, org={org_name}")
-
-    # Check if Neo4j is configured for this org
-    if not org_config or not org_config.get("neo4j_uri"):
-        if not NEO4J_URI:
-            await update.message.reply_text("Knowledge graph not configured.")
-            return
 
     # Track user info for analytics
     user_id = None
@@ -1284,15 +1614,15 @@ async def handle_question(update: Update, context, question: str) -> None:
         username = update.effective_user.username
 
         # Try lookup first, then auto-register if not found
-        sender_name = lookup_person_by_telegram_id(user_id, org_config=org_config)
-        if not sender_name:
-            sender_name = auto_register_telegram_id(user_id, first_name, username=username, org_config=org_config)
-        elif username:
-            # Update username on existing TelegramUser if available
-            run_query(
-                "MATCH (tu:TelegramUser {telegramId: $tid}) SET tu.username = $username",
-                {"tid": user_id, "username": username},
-            )
+        if GRAPH_AVAILABLE:
+            sender_name = lookup_person_by_telegram_id(user_id, org_config=org_config)
+            if not sender_name:
+                sender_name = auto_register_telegram_id(user_id, first_name, username=username, org_config=org_config)
+            elif username:
+                run_query(
+                    "MATCH (tu:TelegramUser {telegramId: $tid}) SET tu.username = $username",
+                    {"tid": user_id, "username": username},
+                )
 
         if sender_name:
             logger.info(f"Identified sender: {sender_name} (Telegram ID: {user_id})")
@@ -1300,7 +1630,7 @@ async def handle_question(update: Update, context, question: str) -> None:
     # Get conversation context for follow-ups
     conv_context = get_conversation_context(context)
 
-    # Agent decides (tool use) - now returns usage and latency
+    # Agent decides (tool use)
     decision = await agent_decide(question, conv_context, sender_name, org_config)
 
     action = decision.get("action")
@@ -1308,12 +1638,9 @@ async def handle_question(update: Update, context, question: str) -> None:
     decision_latency = decision.get("latency_ms", 0)
 
     if action == "respond":
-        # Direct response from agent
         response = decision.get("message", "")
         await update.message.reply_text(response)
         store_in_context(context, question, "direct", response[:100])
-
-        # Log analytics for direct response
         log_query_event(
             query_type="direct",
             tokens_in=decision_usage.get("input_tokens", 0),
@@ -1330,6 +1657,62 @@ async def handle_question(update: Update, context, question: str) -> None:
         )
         return
 
+    if action == "create_todo":
+        params = decision.get("params", {})
+        response = await handle_create_todo(
+            text=params.get("text", ""),
+            priority=params.get("priority", 0),
+            sender_name=sender_name,
+            org_config=org_config,
+        )
+        await update.message.reply_text(response)
+        store_in_context(context, question, "create_todo", response[:100])
+        log_query_event(
+            query_type="create_todo",
+            tokens_in=decision_usage.get("input_tokens", 0),
+            tokens_out=decision_usage.get("output_tokens", 0),
+            latency_ms=decision_latency,
+            results_count=1,
+            success=True,
+            user_id=user_id,
+            user_name=sender_name,
+            question=question,
+            decision_tokens_in=decision_usage.get("input_tokens", 0),
+            decision_tokens_out=decision_usage.get("output_tokens", 0),
+            decision_latency_ms=decision_latency,
+        )
+        return
+
+    if action == "search_memory":
+        params = decision.get("params", {})
+        query_text = params.get("query", question)
+        results = search_memory(query_text, org_name)
+
+        response, format_usage, format_latency = await format_memory_results(question, results, org_config)
+        await update.message.reply_text(response)
+        store_in_context(context, question, "search_memory", f"{len(results)} results")
+
+        total_tokens_in = decision_usage.get("input_tokens", 0) + format_usage.get("input_tokens", 0)
+        total_tokens_out = decision_usage.get("output_tokens", 0) + format_usage.get("output_tokens", 0)
+        log_query_event(
+            query_type="search_memory",
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            latency_ms=decision_latency + format_latency,
+            results_count=len(results),
+            success=True,
+            user_id=user_id,
+            user_name=sender_name,
+            question=question,
+            decision_tokens_in=decision_usage.get("input_tokens", 0),
+            decision_tokens_out=decision_usage.get("output_tokens", 0),
+            decision_latency_ms=decision_latency,
+            format_tokens_in=format_usage.get("input_tokens", 0),
+            format_tokens_out=format_usage.get("output_tokens", 0),
+            format_latency_ms=format_latency,
+        )
+        return
+
     if action == "query":
         query_name = decision.get("query")
         params = decision.get("params", {})
@@ -1338,7 +1721,6 @@ async def handle_question(update: Update, context, question: str) -> None:
             await update.message.reply_text("I couldn't find that information.")
             return
 
-        # Run the query with timing (org-specific Neo4j)
         cypher = QUERIES[query_name]["cypher"]
         logger.info(f"Running query: {query_name} with params: {params} (org: {org_name})")
 
@@ -1347,18 +1729,15 @@ async def handle_question(update: Update, context, question: str) -> None:
         neo4j_latency = (time.perf_counter() - neo4j_start) * 1000
 
         if not results:
-            # Give helpful response based on what was searched
-            helpful_msg = await generate_no_results_response(question, query_name, params)
+            helpful_msg = await generate_no_results_response(question, query_name, params, org_config)
             await update.message.reply_text(helpful_msg)
-
-            # Log analytics for empty results
             log_query_event(
                 query_type=query_name,
                 tokens_in=decision_usage.get("input_tokens", 0),
                 tokens_out=decision_usage.get("output_tokens", 0),
                 latency_ms=decision_latency + neo4j_latency,
                 results_count=0,
-                success=True,  # Query worked, just no results
+                success=True,
                 user_id=user_id,
                 user_name=sender_name,
                 question=question,
@@ -1369,20 +1748,15 @@ async def handle_question(update: Update, context, question: str) -> None:
             )
             return
 
-        # Format and send response (pass params for person context)
         response, format_usage, format_latency = await format_response(question, query_name, results, params, org_config)
         await update.message.reply_text(response)
 
-        # Store in context
         summary = f"{query_name}: {len(results)} results"
         store_in_context(context, question, query_name, summary)
 
-        # Calculate totals for analytics
         total_tokens_in = decision_usage.get("input_tokens", 0) + format_usage.get("input_tokens", 0)
         total_tokens_out = decision_usage.get("output_tokens", 0) + format_usage.get("output_tokens", 0)
         total_latency = decision_latency + neo4j_latency + format_latency
-
-        # Log analytics
         log_query_event(
             query_type=query_name,
             tokens_in=total_tokens_in,
@@ -1601,18 +1975,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.text:
         return
 
-    # Check for onboarding DM first
-    if update.effective_chat.type == "private":
+    chat_type = update.effective_chat.type
+    text = update.message.text.strip()
+
+    # DM mode — resolve org from sender's identity
+    if chat_type == "private":
         if await handle_onboarding_dm(update, context):
             return
 
+        if update.effective_user and GRAPH_AVAILABLE:
+            org_config = resolve_org_for_dm(update.effective_user.id)
+            if org_config:
+                await handle_question(update, context, text, org_config=org_config)
+                return
+
+        await update.message.reply_text(
+            "I don't recognize you yet. Ask your admin to connect your Telegram account to your egregore profile."
+        )
+        return
+
+    # Group mode — standard flow
     if not is_allowed(update):
         return
 
-    text = update.message.text.strip()
-
-    # In groups, only respond if mentioned or replied to
-    chat_type = update.effective_chat.type
     if chat_type in ["group", "supergroup"]:
         bot_username = context.bot.username
         if f"@{bot_username}" not in text:
@@ -2080,6 +2465,10 @@ def main() -> None:
     """Start the bot."""
     global telegram_bot
 
+    # Initialize capabilities
+    check_graph_availability()
+    init_memory_repos()
+
     ptb_app = Application.builder().token(BOT_TOKEN).build()
     telegram_bot = ptb_app.bot
 
@@ -2119,7 +2508,7 @@ def main() -> None:
                 Route("/spirit/activate", handle_spirit_activate, methods=["POST"]),
                 Route("/spirit/heartbeat", handle_spirit_heartbeat, methods=["POST"]),
                 Route("/spirit/callback", handle_spirit_callback, methods=["POST"]),
-            ] + get_mcp_routes()  # MCP server endpoints
+            ]
         )
 
         async def run_server():
@@ -2131,6 +2520,10 @@ def main() -> None:
             webhook_url = f"https://{WEBHOOK_URL}/{BOT_TOKEN}"
             await ptb_app.bot.set_webhook(url=webhook_url)
             logger.info(f"Webhook set to https://{WEBHOOK_URL}/[TOKEN]")
+
+            # Start background memory sync
+            if MEMORY_AVAILABLE:
+                asyncio.create_task(sync_memory_repos_background())
 
             # Run uvicorn
             config = uvicorn.Config(starlette_app, host="0.0.0.0", port=PORT, log_level="info")
