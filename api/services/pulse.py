@@ -1,7 +1,7 @@
-"""Pulse spirit — post-session synthesis using Claude Haiku.
+"""Pulse spirit — post-session synthesis using Sonnet 4.6.
 
-Receives structured session data (observation summary, graph context) and
-returns synthesis: graph edges to create, cross-person signals, and a brief
+Receives structured session data (transcript, observation summary, graph context)
+and returns synthesis: graph edges to create, cross-person signals, and a brief
 for the person's next session greeting.
 """
 
@@ -106,7 +106,13 @@ async def synthesize_session(session_data: dict) -> dict:
             topics = ", ".join(q.get("topics", [])[:5]) if q.get("topics") else "no topics"
             parts.append(f"- {q.get('id', '?')}: {q.get('title', 'untitled')} [{topics}]")
 
-    # Raw observation lines for deeper analysis (Sonnet only)
+    # Full session transcript — the primary context for synthesis
+    transcript = session_data.get("transcript", "")
+    if transcript:
+        parts.append("\n--- Session transcript ---")
+        parts.append(transcript)
+
+    # Raw observation lines as supplementary signal
     obs_raw = session_data.get("obs_raw", [])
     if obs_raw:
         parts.append("\n--- Raw observation log (recent) ---")
@@ -115,13 +121,14 @@ async def synthesize_session(session_data: dict) -> dict:
 
     user_message = "\n".join(parts)
 
-    # Sonnet 4.6 for all sessions — cost is low (~$0.01-0.03), quality matters more
-    if len(user_message) > 8000:
-        user_message = user_message[:8000] + "\n\n[truncated]"
+    # Full transcript up to 100K tokens (~400K chars). Sonnet 4.6 handles 1M context.
+    MAX_CHARS = 400_000
+    if len(user_message) > MAX_CHARS:
+        user_message = user_message[:MAX_CHARS] + "\n\n[truncated]"
 
     response = await client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=800,
+        max_tokens=1500,
         system=PULSE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -133,13 +140,16 @@ async def synthesize_session(session_data: dict) -> dict:
         result = json.loads(raw_text)
     except json.JSONDecodeError:
         # Try to extract JSON from markdown code blocks
-        if "```" in raw_text:
-            json_part = raw_text.split("```")[1]
-            if json_part.startswith("json"):
-                json_part = json_part[4:]
-            result = json.loads(json_part.strip())
-        else:
-            logger.warning("[PULSE] Failed to parse JSON from Haiku: %s", raw_text[:200])
+        try:
+            if "```" in raw_text:
+                json_part = raw_text.split("```")[1]
+                if json_part.startswith("json"):
+                    json_part = json_part[4:]
+                result = json.loads(json_part.strip())
+            else:
+                raise json.JSONDecodeError("no code block", raw_text, 0)
+        except (json.JSONDecodeError, IndexError):
+            logger.warning("[PULSE] Failed to parse JSON response: %s", raw_text[:200])
             result = {"edges": [], "signals": [], "brief": "Session completed."}
 
     # Validate structure

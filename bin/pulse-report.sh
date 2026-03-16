@@ -12,7 +12,8 @@ NOTIFY="$SCRIPT_DIR/bin/notify.sh"
 TELEMETRY="$SCRIPT_DIR/bin/telemetry.sh"
 PULSE_LOG="$SCRIPT_DIR/.pulse/runs.jsonl"
 DAYS="${1:-7}"
-RECIPIENT="${2:-cem}"
+# Recipient: arg > config > default (cem for testing)
+RECIPIENT="${2:-$(jq -r '.pulse.report_recipient // "cem"' "$CONFIG" 2>/dev/null || echo "cem")}"
 
 if [ ! -f "$PULSE_LOG" ] || [ ! -s "$PULSE_LOG" ]; then
   echo "No pulse data yet."
@@ -20,12 +21,14 @@ if [ ! -f "$PULSE_LOG" ] || [ ! -s "$PULSE_LOG" ]; then
 fi
 
 # --- Config ---
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a; source "$SCRIPT_DIR/.env"; set +a
+ENV_FILE="$SCRIPT_DIR/.env"
+API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+API_KEY=""
+if [ -f "$ENV_FILE" ]; then
+  API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+  _url=$(grep '^EGREGORE_API_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+  [ -n "$_url" ] && API_URL="$_url"
 fi
-
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}"
-API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
   echo "Error: API config required." >&2

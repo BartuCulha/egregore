@@ -2,15 +2,17 @@
 set -euo pipefail
 
 # Pulse spirit — post-session synthesis.
-# Reads observation buffer + graph context, calls Haiku for synthesis,
-# writes edges + brief back to graph, optionally notifies via Telegram.
+# Reads transcript + observation buffer + graph context, calls Sonnet for synthesis,
+# writes edges + brief back to graph.
 #
 # Runs in background from transcript-archive.sh. Must not block session exit.
-# All output suppressed — this runs silently.
 #
-# Usage: bash bin/pulse.sh <session-id> <author-github> <branch> <obs-buffer-path>
+# Usage: bash bin/pulse.sh <session-id> <author-github> <branch> <obs-buffer-path> <transcript-path>
 
-exec >/dev/null 2>&1
+# Suppress stdout, log errors to .pulse/errors.log
+mkdir -p "$(cd "$(dirname "$0")/.." && pwd)/.pulse" 2>/dev/null
+exec 2>> "$(cd "$(dirname "$0")/.." && pwd)/.pulse/errors.log"
+exec 1>/dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
@@ -25,6 +27,7 @@ SESSION_ID="${1:-}"
 AUTHOR_GH="${2:-}"
 BRANCH="${3:-}"
 OBS_BUFFER="${4:-}"
+TRANSCRIPT_PATH="${5:-}"
 
 if [ -z "$SESSION_ID" ] || [ -z "$AUTHOR_GH" ]; then
   exit 0
@@ -50,12 +53,14 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a; source "$SCRIPT_DIR/.env"; set +a
+ENV_FILE="$SCRIPT_DIR/.env"
+API_URL=$(jq -r '.api_url // empty' "$CONFIG")
+API_KEY=""
+if [ -f "$ENV_FILE" ]; then
+  API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+  _url=$(grep '^EGREGORE_API_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+  [ -n "$_url" ] && API_URL="$_url"
 fi
-
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
-API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
   exit 0
@@ -63,8 +68,11 @@ fi
 
 START_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || echo "0")
 
-# Drop marker for sweep resilience — if hook doesn't fire cleanly,
-# a periodic sweep can detect un-pulsed sessions via absence of .pulsed file
+# Dedup guard — atomic mkdir prevents duplicate runs on hook retries
+PULSE_LOCK="/tmp/egregore-pulse-lock-${SESSION_ID}"
+mkdir "$PULSE_LOCK" 2>/dev/null || exit 0
+
+# Sweep marker — periodic sweep can detect un-pulsed sessions by absence
 PULSE_MARKER="/tmp/egregore-pulsed-${SESSION_ID}"
 
 # --- 1. Read observation buffer ---
@@ -78,8 +86,7 @@ if [ -n "$OBS_BUFFER" ] && [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
   OBS_PATHS=$(awk -F'"path":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | head -30 | jq -R . | jq -s '.' 2>/dev/null || echo '[]')
 fi
 
-# Clean up our copy of the buffer
-rm -f "$OBS_BUFFER" 2>/dev/null
+# Buffer cleanup is handled by transcript-archive.sh — don't delete here
 
 # --- 2. Query graph context (batch: 3 queries in 1 roundtrip) ---
 GRAPH_CTX=$(bash "$GB" "$(cat <<BATCHEOF
@@ -106,8 +113,16 @@ OTHER_SESSIONS=$(echo "$GRAPH_CTX" | jq -c '[.results[2].values[]? | {id: .[0], 
 # Build active_quests array
 ACTIVE_QUESTS=$(echo "$GRAPH_CTX" | jq -c '[.results[3].values[]? | {id: .[0], title: .[1], topics: .[2]}]' 2>/dev/null || echo '[]')
 
-# --- 3. Build payload — always Sonnet 4.6 (1M), full context ---
-# Include raw observation lines for deep analysis
+# --- 3. Build payload — Sonnet 4.6 with full transcript context ---
+
+# Read transcript content (the key context for synthesis)
+TRANSCRIPT_CONTENT=""
+if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+  # Read transcript, extract user/assistant messages, cap at ~100K tokens (~400KB text)
+  TRANSCRIPT_CONTENT=$(jq -r 'select(.type == "human" or .type == "assistant") | "\(.type): \(.message.content // .content // "" | if type == "array" then map(.text // "") | join(" ") else tostring end)"' "$TRANSCRIPT_PATH" 2>/dev/null | head -c 400000 || true)
+fi
+
+# Raw observation lines (buffer is still available — we no longer delete it)
 OBS_RAW='[]'
 if [ -n "$OBS_BUFFER" ] && [ -f "$OBS_BUFFER" ]; then
   OBS_RAW=$(tail -100 "$OBS_BUFFER" 2>/dev/null | jq -R . | jq -s '.' 2>/dev/null || echo '[]')
@@ -125,6 +140,7 @@ PAYLOAD=$(jq -n -c \
   --argjson other_sessions "$OTHER_SESSIONS" \
   --argjson active_quests "$ACTIVE_QUESTS" \
   --argjson obs_raw "$OBS_RAW" \
+  --arg transcript "$TRANSCRIPT_CONTENT" \
   '{
     session_id: $sid,
     author: $author,
@@ -136,14 +152,15 @@ PAYLOAD=$(jq -n -c \
     related_sessions: $related_sessions,
     other_sessions: $other_sessions,
     active_quests: $active_quests,
-    obs_raw: $obs_raw
+    obs_raw: $obs_raw,
+    transcript: $transcript
   }')
 
 RESPONSE=$(curl -sf -X POST "${API_URL}/api/spirits/pulse" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
-  --max-time 60 2>/dev/null || echo '{"edges":[],"signals":[],"brief":""}')
+  --max-time 120 2>/dev/null || echo '{"edges":[],"signals":[],"brief":""}')
 
 # Validate JSON
 if ! echo "$RESPONSE" | jq -e '.edges' >/dev/null 2>&1; then

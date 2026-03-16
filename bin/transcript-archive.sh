@@ -108,7 +108,7 @@ if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
 
   # --- Launch Pulse synthesis (background, non-blocking) ---
   bash "$SCRIPT_DIR/bin/pulse.sh" \
-    "$SESSION_ID" "$AUTHOR" "$BRANCH" "$PULSE_BUFFER" \
+    "$SESSION_ID" "$AUTHOR" "$BRANCH" "$PULSE_BUFFER" "$TRANSCRIPT_PATH" \
     &
 fi
 

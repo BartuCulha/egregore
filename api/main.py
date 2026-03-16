@@ -5003,7 +5003,7 @@ async def spirits_scribe(body: ScribeSummarize, org: dict = Depends(validate_api
 
 @app.post("/api/spirits/pulse")
 async def spirits_pulse(body: PulseSynthesize, org: dict = Depends(validate_api_key)):
-    """Pulse spirit: post-session synthesis using Haiku."""
+    """Pulse spirit: post-session synthesis using Sonnet."""
     from .services.pulse import synthesize_session
     try:
         result = await synthesize_session(body.dict())

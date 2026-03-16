@@ -769,9 +769,16 @@ ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
     '{merged_prs: $merged, implemented_handoffs: $impl}' 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}'
 ) > "$CTX_DIR/lifecycle" 2>/dev/null &
 
-# 10. Last Pulse brief (background)
+# 10. Last Pulse brief (background) — gated on feature flag + API key
 (
-  if [ -n "$GH_USER_LC" ]; then
+  PULSE_ENABLED=$(jq -r '.features.pulse // "false"' "$CONFIG" 2>/dev/null || echo "false")
+  HAS_API_KEY=false
+  if [ -f "$SCRIPT_DIR/.env" ]; then
+    _key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
+    [ -n "$_key" ] && HAS_API_KEY=true
+  fi
+
+  if [ "$PULSE_ENABLED" = "true" ] && [ "$HAS_API_KEY" = "true" ] && [ -n "$GH_USER_LC" ]; then
     BRIEF_RESULT=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
       MATCH (p:Person {github: \$gh})
       WHERE p.lastBrief IS NOT NULL

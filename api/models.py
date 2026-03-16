@@ -234,6 +234,7 @@ class PulseSynthesize(BaseModel):
     other_sessions: list[dict] = []
     active_quests: list[dict] = []
     obs_raw: list[str] = []  # raw observation lines for deep analysis
+    transcript: str = ""  # full session transcript for rich synthesis
 
 
 class PulseReport(BaseModel):
