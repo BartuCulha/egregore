@@ -29,6 +29,7 @@ Usage:
     python -m analytics --days 30 # Last 30 days
 """
 
+import os
 import sqlite3
 import json
 import uuid
@@ -162,6 +163,7 @@ def log_query_event(
     user_id: Optional[int] = None,
     user_name: Optional[str] = None,
     question: Optional[str] = None,
+    model: Optional[str] = None,
     decision_tokens_in: int = 0,
     decision_tokens_out: int = 0,
     decision_latency_ms: float = 0,
@@ -195,7 +197,7 @@ def log_query_event(
         tokens_out=tokens_out,
         latency_ms=latency_ms,
         success=success,
-        model="claude-haiku-4-5-20251001",
+        model=model or os.environ.get("LLM_MODEL", "claude-sonnet-4-20250514"),
         user_id=user_id,
         user_name=user_name,
         metadata=metadata,
