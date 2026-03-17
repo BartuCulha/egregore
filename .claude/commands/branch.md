@@ -42,18 +42,6 @@ git branch --list "dev/$AUTHOR/*$SLUG*" "feature/*$SLUG*" "bugfix/*$SLUG*"
 
 If a match is found, offer to resume it instead of creating a new one.
 
-## Reusing current worktree
-
-If already in a worktree and the user needs a new branch (e.g., after their PR was merged):
-1. Do NOT exit the worktree or create a new one
-2. Create the new branch and checkout within the existing worktree:
-   ```bash
-   git fetch origin develop --quiet
-   git checkout -b dev/$AUTHOR/$NEW_SLUG origin/develop
-   ```
-3. The worktree directory stays the same — only the branch changes
-4. Confirm: `Switched to dev/$AUTHOR/$NEW_SLUG (same worktree).`
-
 ## Example
 
 ```

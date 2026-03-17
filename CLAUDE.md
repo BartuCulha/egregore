@@ -67,6 +67,7 @@ This creates `(:Session)-[:IMPLEMENTS]->(:Session)`. When the session wraps, `/w
 
 **The only exceptions:**
 - User explicitly says `/branch` (they're doing it themselves)
+- User asks a pure question with no work intent ("what does X do?", "how does Y work?")
 - Already on a working branch (resumed session)
 
 If you reach your second response and are still on develop with no branch created, something went wrong. Create one immediately from whatever context you have.
