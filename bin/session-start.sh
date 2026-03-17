@@ -868,24 +868,9 @@ if [ -n "$REPOS_STATUS" ]; then
   printf "$REPOS_STATUS"
 fi
 
-# Auto-apply upstream framework updates (bin/, .claude/commands/, CLAUDE.md, skills/)
-# Only update when upstream has NEW commits we don't have (forward-only).
-# git log HEAD..upstream/main shows commits in upstream that aren't in our history.
-UPSTREAM_NEW=$(git log HEAD..upstream/main --oneline -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-if [ -n "$UPSTREAM_NEW" ]; then
-  UPDATE_COUNT=$(echo "$UPSTREAM_NEW" | wc -l | tr -d ' ')
-  # Check for uncommitted local changes to framework files (protects active development)
-  LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-  if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
-    echo "  ⟳ Framework update available — run /update"
-  elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
-    git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
-    git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-    echo "  ✓ Framework updated"
-  else
-    echo "  ⟳ Framework update available — run /update"
-  fi
-fi
+# Framework updates come through PRs to develop — no separate auto-update channel.
+# The develop sync above already keeps framework files current.
+# Use /update for manual upstream pulls when needed.
 
 # --- One-time migration: fix aliases to use 'claude "start"' ---
 # v1: 'claude start' → 'claude' (cross-instance bug)
