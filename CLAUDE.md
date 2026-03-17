@@ -249,7 +249,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 **Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Identity** — `/me` (view profile or set display name)
-**Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
+**Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Spirits** — `/summon` (design + launch persistent agent processes — recurring loops or watchdogs)
@@ -267,6 +267,7 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
 - PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
 - Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop
+- Announcements: `/announce` (broadcast to Telegram group with preview) vs `/handoff` (structured session handoff to a person) vs `bin/notify.sh send` (direct message to one person) — "tell the team", "let everyone know" = /announce
 
 ## Socratic Questioning (MANDATORY)
 
