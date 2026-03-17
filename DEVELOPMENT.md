@@ -903,3 +903,20 @@ memory/
 - **Index pattern**: Heavy use of `index.md` files to avoid context bloat — Claude reads indexes first, dives into specific files as needed
 - **Filename convention**: Most files use `YYYY-MM-DD-author-topic.md` for chronological sorting and attribution
 - **Planned**: `memory/index.yaml` will serve as a fast-lookup index for Claude (not yet implemented)
+
+---
+
+## 10. Infrastructure — Neo4j Instances
+
+Two separate Neo4j instances. **Never cross them.**
+
+| Instance | Purpose | Org scoping | Railway vars |
+|----------|---------|-------------|--------------|
+| CL instance | Curve Labs internal (our Egregore) | No org node, single-tenant | `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` |
+| Core instance | Client/customer Egregores | Org node per customer, multi-tenant | `NEO4J_CORE_URI`, `NEO4J_CORE_USER`, `NEO4J_CORE_PASSWORD` |
+
+**OSS users hit neither.** When `EGREGORE_API_KEY` is missing, `graph.sh` returns empty JSON — no instance is contacted. All graph-dependent features degrade gracefully (no errors, just empty results).
+
+**Registered free users** get routed to the Core instance under their org node when they run `/connect` or any graph-writing command. The API gateway (`api_url` in `egregore.json`) resolves the correct Neo4j instance from the org's config in Supabase.
+
+**Hard rule**: Never write queries that assume a specific instance. Always go through `bin/graph.sh` which routes via the API gateway. The `$_org` parameter is auto-injected by the gateway for scoping.
