@@ -38,7 +38,7 @@ git -C "$REPO_ROOT" fetch origin develop --quiet 2>/dev/null || true
 
 # --- Create branch (idempotent — skip if exists) ---
 if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH" 2>/dev/null; then
-  git -C "$REPO_ROOT" branch "$BRANCH" origin/develop 2>/dev/null || {
+  git -C "$REPO_ROOT" branch "$BRANCH" origin/develop >/dev/null 2>&1 || {
     echo "Error: failed to create branch $BRANCH" >&2
     exit 1
   }
