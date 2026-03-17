@@ -158,12 +158,50 @@ case "$CMD" in
     fi
     ;;
 
+  health)
+    # Check worktree + branch health
+    # Args: [worktree-path-or-cwd]
+    # Exit codes: 0=healthy, 1=not_worktree, 2=branch_gone, 3=protected_branch
+    WT_PATH="${1:-$(pwd)}"
+
+    # Not a worktree?
+    if [ ! -f "$WT_PATH/.git" ]; then
+      echo '{"status":"not_worktree"}'
+      exit 1
+    fi
+
+    BRANCH=$(git -C "$WT_PATH" branch --show-current 2>/dev/null || echo "")
+
+    # On a protected branch?
+    case "$BRANCH" in
+      develop|main|master)
+        echo "{\"status\":\"protected_branch\",\"branch\":\"$BRANCH\"}"
+        exit 3
+        ;;
+    esac
+
+    # Check if remote branch still exists
+    git -C "$WT_PATH" fetch origin --prune --quiet 2>/dev/null || true
+    if ! git -C "$WT_PATH" ls-remote --heads origin "$BRANCH" 2>/dev/null | grep -q "$BRANCH"; then
+      # Was it merged into develop?
+      if git -C "$WT_PATH" branch -r --merged origin/develop 2>/dev/null | grep -q "origin/$BRANCH" 2>/dev/null; then
+        echo "{\"status\":\"merged\",\"branch\":\"$BRANCH\"}"
+      else
+        echo "{\"status\":\"remote_deleted\",\"branch\":\"$BRANCH\"}"
+      fi
+      exit 2
+    fi
+
+    echo "{\"status\":\"healthy\",\"branch\":\"$BRANCH\"}"
+    exit 0
+    ;;
+
   list)
     git worktree list
     ;;
 
   *)
-    echo "Usage: worktree.sh {setup|cleanup|cleanup-orphans|list}" >&2
+    echo "Usage: worktree.sh {setup|cleanup|cleanup-orphans|health|list}" >&2
     exit 1
     ;;
 esac

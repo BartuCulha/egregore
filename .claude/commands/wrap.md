@@ -241,12 +241,15 @@ Run the `/save` flow: commit + push working branch, create PR to develop if need
 bash bin/telemetry.sh emit "command" '{"command":"wrap"}' 2>/dev/null &
 ```
 
-## Step 7.5: Worktree cleanup
+## Step 7.5: Mark worktree for cleanup
 
 If currently in a worktree (check: `[ -f .git ]` — worktrees have .git as a file, not directory):
-1. Note the current worktree path for cleanup
-2. Use `ExitWorktree` with action `"remove"` to leave and clean up
-3. If ExitWorktree fails due to uncommitted changes, warn user and use action `"keep"`
+1. Write a cleanup marker so the SessionEnd hook removes this worktree after the session exits:
+   ```bash
+   mkdir -p "$HOME/.egregore" && echo "$(pwd)" > "$HOME/.egregore/worktree-cleanup-$(echo -n "$(pwd)" | md5 2>/dev/null || echo -n "$(pwd)" | md5sum 2>/dev/null | cut -d' ' -f1).marker"
+   ```
+2. Do NOT call ExitWorktree. The session is still running in this directory.
+   Cleanup happens automatically when the session ends (via transcript-archive.sh).
 
 ## Step 8: Confirmation TUI
 
