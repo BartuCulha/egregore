@@ -98,9 +98,18 @@ if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
 
   bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$ACTIVITY_CYPHER" "$ACTIVITY_PARAMS" 2>/dev/null || true
 
+  # --- Pulse: copy buffer for post-session synthesis before cleanup ---
+  PULSE_BUFFER="/tmp/egregore-pulse-${SESSION_ID}.jsonl"
+  cp "$OBS_BUFFER" "$PULSE_BUFFER" 2>/dev/null || true
+
   # Clean up buffer and compact sequence counter
   rm -f "$OBS_BUFFER"
   rm -f "/tmp/egregore-compact-seq-${SESSION_ID}" 2>/dev/null
+
+  # --- Launch Pulse synthesis (background, non-blocking) ---
+  bash "$SCRIPT_DIR/bin/pulse.sh" \
+    "$SESSION_ID" "$AUTHOR" "$BRANCH" "$PULSE_BUFFER" "$TRANSCRIPT_PATH" \
+    &
 fi
 
 # --- Emit session_end telemetry + flush buffer (background, non-blocking) ---
