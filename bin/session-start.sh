@@ -380,7 +380,16 @@ setup_develop() {
   CURRENT_BRANCH=$(git branch --show-current)
 
   # Update local develop ref from remote without switching branches
-  git fetch origin develop:develop --quiet 2>/dev/null || true
+  # Use fetch + force-update to handle divergence (e.g., from auto-update commits)
+  git fetch origin develop --quiet 2>/dev/null || true
+  if [[ "$CURRENT_BRANCH" != "develop" ]]; then
+    # Safe to force-update when not checked out
+    git branch -f develop origin/develop 2>/dev/null || true
+  else
+    # On develop — try ff merge, fall back to reset
+    git merge --ff-only origin/develop --quiet 2>/dev/null || \
+      git reset --hard origin/develop --quiet 2>/dev/null || true
+  fi
   DEVELOP_SYNCED="true"
 
   # Count commits on develop ahead of main
@@ -932,6 +941,8 @@ if [ -n "$UPSTREAM_NEW" ]; then
   elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
     git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
     git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+    # Push the auto-update so local develop doesn't diverge from origin
+    git push origin develop --quiet 2>/dev/null || true
     echo "  ✓ Framework updated"
   else
     echo "  ⟳ Framework update available — run /update"
