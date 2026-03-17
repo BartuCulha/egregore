@@ -36,36 +36,31 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 
 ## After Greeting — BRANCH ON FIRST RESPONSE
 
-**This is a mandatory behavioral rule.** When the user answers "What are you working on?" (or says anything describing work), your **first action** — before reading files, before exploring code, before anything else — is to create a working branch:
+**This is a mandatory behavioral rule.** When the user answers "What are you working on?" (or says anything describing work), your **first action** — before reading files, before exploring code, before anything else — is to enter a worktree:
 
 1. Derive a topic slug from what the user said (same rules as `/branch`)
-2. Create the branch at the right commit: `git fetch origin develop --quiet && git branch dev/{author}/{slug} origin/develop`
-3. Enter worktree: use `EnterWorktree` with `name` set to the slug
-4. Inside the worktree, switch to the named branch: `git checkout dev/{author}/{slug}`
-5. Run setup: `bash <main-project-dir>/bin/worktree.sh setup "$(pwd)" "<main-project-dir>"` (where main-project-dir is the directory you were in before EnterWorktree — use the absolute path so it works regardless of which branch the worktree is on)
-6. Confirm: `On dev/{author}/{slug} (worktree).`
+2. Call `EnterWorktree` with `name` set to the slug
 
-**Fallback:** If `EnterWorktree` fails (not in a git repo, tool unavailable, etc.), fall back to the old flow: `git checkout -b dev/{author}/{slug} origin/develop`.
+The WorktreeCreate hook handles everything automatically: creates `dev/{author}/{slug}` branch from `origin/develop`, creates the worktree, sets up symlinks. No manual branch creation, no git checkout, no worktree.sh setup.
 
-7. Update the session in the graph (fire-and-forget, must not delay response):
+3. Confirm: `On dev/{author}/{slug} (worktree).`
+
+**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b dev/{author}/{slug} origin/develop`.
+
+4. Update the session in the graph (fire-and-forget):
    ```bash
    bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &
    ```
-   Replace "topic from slug" with the slug words separated by spaces (e.g. `session-naming-bug` → `session naming bug`), and use the actual branch name.
 
 Then proceed with their request.
 
 ### Handoff claiming
 
-If the session context includes `addressed_to_user` handoffs and the user says they're working on one of them (e.g. "I'm picking up the google-connector handoff"), create the IMPLEMENTS link immediately after branch creation:
+If the session context includes `addressed_to_user` handoffs and the user says they're working on one of them, create the IMPLEMENTS link immediately after branch creation:
 
 ```bash
 bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
 ```
-
-Where `$HANDOFF_SESSION_ID` is the session ID of the handoff being claimed (query the graph if needed: `MATCH (s:Session)-[:HANDED_TO]->(p:Person {github: $gh}) WHERE s.handoffStatus IN ['pending','read'] AND s.topic CONTAINS $keyword RETURN s.id`).
-
-This creates `(:Session)-[:IMPLEMENTS]->(:Session)`. When the session wraps, `/wrap` checks for this link and notifies the handoff author.
 
 **The only exceptions:**
 - User explicitly says `/branch` (they're doing it themselves)

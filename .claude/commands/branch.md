@@ -4,16 +4,14 @@ Description: $ARGUMENTS
 
 ## What to do
 
-1. Fetch latest develop
-2. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
-3. Determine branch type from description:
+1. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
+2. Determine branch type from description:
    - `dev/{author}/{topic-slug}` — default for session work
    - `feature/{topic-slug}` — explicit feature work
    - `bugfix/{topic-slug}` — bug fixes
-4. Create branch at the right commit (don't switch yet): `git branch {branch-name} origin/develop`
-5. Enter worktree: use `EnterWorktree` with `name` set to the topic slug
-6. Inside the worktree, switch to the named branch: `git checkout {branch-name}`
-7. Run setup: `bash <main-project-dir>/bin/worktree.sh setup "$(pwd)" "<main-project-dir>"`
+3. Call `EnterWorktree` with `name` set to the topic slug
+
+The WorktreeCreate hook handles everything: fetches develop, creates the branch, creates the worktree, sets up symlinks.
 
 **Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} origin/develop`
 
