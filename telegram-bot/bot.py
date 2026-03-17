@@ -451,12 +451,31 @@ def lookup_person_by_telegram_id(telegram_id: int, org_config: dict = None) -> O
 
     Uses org-specific driver if provided (Person nodes are per-org DB).
     Falls back to default driver for backwards compatibility.
+    Handles telegramId stored as either int or string in Neo4j.
     """
-    query = "MATCH (p:Person {telegramId: $tid}) RETURN p.name AS name"
-    params = {"tid": telegram_id}
-    results = run_org_query(query, params, org_config) if org_config else run_query(query, params)
+    _run = (lambda q, p: run_org_query(q, p, org_config)) if org_config else run_query
+
+    # Try integer match first (normal case)
+    results = _run(
+        "MATCH (p:Person {telegramId: $tid}) RETURN p.name AS name",
+        {"tid": telegram_id},
+    )
     if results and results[0].get("name"):
         return results[0]["name"]
+
+    # Fallback: telegramId may have been stored as string (e.g. from API)
+    results = _run(
+        "MATCH (p:Person {telegramId: $tid_str}) RETURN p.name AS name",
+        {"tid_str": str(telegram_id)},
+    )
+    if results and results[0].get("name"):
+        # Fix the type while we're here
+        _run(
+            "MATCH (p:Person {telegramId: $tid_str}) SET p.telegramId = $tid",
+            {"tid_str": str(telegram_id), "tid": telegram_id},
+        )
+        return results[0]["name"]
+
     return None
 
 
@@ -488,11 +507,33 @@ def auto_register_telegram_id(telegram_id: int, first_name: str = None, username
                RETURN p.name AS name""",
             {"username": username, "tid": telegram_id}
         )
-        if results:
-            person_name = results[0].get("name")
-            logger.info(f"Auto-registered {person_name} with Telegram ID {telegram_id} (matched by username)")
-            # TelegramUser + IDENTIFIES: only works if both nodes are in same DB.
-            # For CL (same DB), create the link. For customer orgs (split DB), skip.
+        if results and results[0].get("name"):
+            person_name = results[0]["name"]
+            logger.info(f"Auto-registered {person_name} with Telegram ID {telegram_id} (matched by telegramUsername)")
+            run_query(
+                """
+                MERGE (tu:TelegramUser {telegramId: $tid})
+                SET tu.firstName = $firstName, tu.username = $username
+                """,
+                {"tid": telegram_id, "firstName": first_name or "", "username": username},
+            )
+            return person_name
+
+    # Try matching by Telegram username → Person.name or Person.github
+    # Many people use the same username across platforms
+    if username:
+        username_lower = username.lower().strip()
+        results = _run_person(
+            """MATCH (p:Person)
+               WHERE (p.name = $uname OR p.github = $uname)
+               AND p.telegramId IS NULL
+               SET p.telegramId = $tid
+               RETURN p.name AS name""",
+            {"uname": username_lower, "tid": telegram_id}
+        )
+        if results and results[0].get("name"):
+            person_name = results[0]["name"]
+            logger.info(f"Auto-registered {person_name} with Telegram ID {telegram_id} (matched by username→name/github)")
             run_query(
                 """
                 MERGE (tu:TelegramUser {telegramId: $tid})
@@ -1596,11 +1637,16 @@ def is_allowed(update: Update) -> bool:
     return chat_id in ALLOWED_CHAT_IDS or user_id in ALLOWED_CHAT_IDS or chat_id in ORG_CONFIG
 
 
-def resolve_orgs_for_dm(telegram_id: int) -> list[dict]:
-    """For DMs, find all orgs a user belongs to by checking Person nodes across all orgs."""
+def resolve_orgs_for_dm(telegram_id: int, first_name: str = None, username: str = None) -> list[dict]:
+    """For DMs, find all orgs a user belongs to by checking Person nodes across all orgs.
+
+    Tries lookup first, then auto-registration if not found.
+    """
     matches = []
     for cid, cfg in ORG_CONFIG.items():
         name = lookup_person_by_telegram_id(telegram_id, org_config=cfg)
+        if not name:
+            name = auto_register_telegram_id(telegram_id, first_name, username=username, org_config=cfg)
         if name:
             matches.append(cfg)
     return matches
@@ -2008,7 +2054,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if text.lower().startswith("/switch"):
                 if context.user_data:
                     context.user_data.pop("dm_org", None)
-                orgs = resolve_orgs_for_dm(update.effective_user.id)
+                orgs = resolve_orgs_for_dm(
+                    update.effective_user.id,
+                    first_name=update.effective_user.first_name,
+                    username=update.effective_user.username,
+                )
                 if len(orgs) > 1:
                     names = "\n".join(f"  {i+1}. {cfg['name']}" for i, cfg in enumerate(orgs))
                     await update.message.reply_text(f"Which egregore?\n{names}\n\nReply with the number.")
@@ -2030,7 +2080,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     return
 
             # Find all orgs user belongs to
-            orgs = resolve_orgs_for_dm(update.effective_user.id)
+            orgs = resolve_orgs_for_dm(
+                update.effective_user.id,
+                first_name=update.effective_user.first_name,
+                username=update.effective_user.username,
+            )
             if len(orgs) > 1:
                 names = "\n".join(f"  {i+1}. {cfg['name']}" for i, cfg in enumerate(orgs))
                 await update.message.reply_text(f"You're in {len(orgs)} egregores:\n{names}\n\nReply with the number.")
@@ -2052,9 +2106,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if chat_type in ["group", "supergroup"]:
         bot_username = context.bot.username
-        if f"@{bot_username}" not in text:
-            if not (update.message.reply_to_message and
-                    update.message.reply_to_message.from_user.id == context.bot.id):
+        is_bot_mentioned = f"@{bot_username}" in text
+        is_reply_to_bot = (update.message.reply_to_message and
+                           update.message.reply_to_message.from_user and
+                           update.message.reply_to_message.from_user.id == context.bot.id)
+
+        if not is_bot_mentioned:
+            if not is_reply_to_bot:
+                return
+            # Reply to bot but starts with @someone_else — directed at that person, not us
+            at_match = re.match(r'^@(\w+)', text)
+            if at_match and at_match.group(1).lower() != bot_username.lower():
                 return
         text = text.replace(f"@{bot_username}", "").strip()
 
