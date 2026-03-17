@@ -356,6 +356,25 @@ wait 2>/dev/null || true
 # --- Worktree orphan cleanup (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
 
+# --- Clean up stale worktree cleanup markers (from crashed sessions) ---
+(
+  for MARKER_FILE in "$HOME/.egregore"/worktree-cleanup-*.marker; do
+    [ -f "$MARKER_FILE" ] || continue
+    WT_MARKER_PATH=$(cat "$MARKER_FILE" 2>/dev/null)
+    if [ -n "$WT_MARKER_PATH" ] && [ -d "$WT_MARKER_PATH" ]; then
+      PID_FILE="$WT_MARKER_PATH/.egregore-worktree-pid"
+      if [ -f "$PID_FILE" ]; then
+        STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
+          continue  # PID alive — another session still using this worktree
+        fi
+      fi
+      bash "$SCRIPT_DIR/bin/worktree.sh" cleanup "$WT_MARKER_PATH" 2>/dev/null || true
+    fi
+    rm -f "$MARKER_FILE" 2>/dev/null || true
+  done
+) 2>/dev/null &
+
 # --- Git health check ---
 if git show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
   HEALTH_GIT="ok"
