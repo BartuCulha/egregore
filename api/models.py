@@ -220,3 +220,23 @@ class ScribeSummarize(BaseModel):
     title: str
     content: str
     type: str = "document"
+
+
+class PulseSynthesize(BaseModel):
+    session_id: str
+    author: str
+    topic: str = ""
+    branch: str = ""
+    tools_used: list[str] = []
+    files_touched: list[str] = []
+    tool_count: int = 0
+    related_sessions: list[dict] = []
+    other_sessions: list[dict] = []
+    active_quests: list[dict] = []
+    obs_raw: list[str] = []  # raw observation lines for deep analysis
+    transcript: str = ""  # full session transcript for rich synthesis
+
+
+class PulseReport(BaseModel):
+    runs: list[dict]  # full {session_id, timestamp, payload, response} objects
+    period_days: int = 7

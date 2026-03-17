@@ -6,6 +6,9 @@
   "repo_name": "egregore",
   "slug": "curvelabs",
   "repos": ["egregore-site"],
+  "features": {
+    "pulse": true
+  },
   "connectors": {
     "google": {
       "enabled": true,
