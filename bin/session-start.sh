@@ -812,68 +812,51 @@ cat << 'GREETING'
 GREETING
 
 # --- Ornamented status ---
-# Humanize repo_name: egregore-0 → Egregore 0
 REPO_NAME=$(jq -r '.repo_name // "egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-INSTANCE_NAME=$(echo "$REPO_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+GITHUB_ORG_DISPLAY=$(jq -r '.github_org // ""' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 ORG_NAME=$(jq -r '.org_name // ""' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 
-# Build the status line with right-aligned org name
-SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
-echo "$SEPARATOR"
-
-# Instance + org line (right-aligned org)
-LEFT="  ◈ $INSTANCE_NAME"
-RIGHT="$ORG_NAME"
-LINE_WIDTH=67
-LEFT_LEN=${#LEFT}
-RIGHT_LEN=${#RIGHT}
-PADDING=$((LINE_WIDTH - LEFT_LEN - RIGHT_LEN))
-if [ "$PADDING" -lt 1 ]; then PADDING=1; fi
-printf "%s%*s%s\n" "$LEFT" "$PADDING" "" "$RIGHT"
-
-# User + branch + memory line
 DISPLAY_NAME=""
 if [ -f "$STATE_FILE" ]; then
   DISPLAY_NAME=$(jq -r '.display_name // .name // empty' "$STATE_FILE" 2>/dev/null)
 fi
 GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 
-BRANCH_STATUS="$BRANCH · synced"
+# --- Line 1: Org/Repo + User + Branch (primary info) ---
+SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
+
+# Build identity line: Org/repo on left, user + branch on right
+IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+BRANCH_COMPACT="$BRANCH"
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
-  BRANCH_STATUS="$BRANCH_STATUS · $COMMITS_AHEAD ahead"
+  BRANCH_COMPACT="${BRANCH} · ${COMMITS_AHEAD}↑"
 fi
+IDENTITY_RIGHT="${GREETING_NAME} · ${BRANCH_COMPACT}"
+LINE_WIDTH=67
+ID_LEFT_LEN=${#IDENTITY_LEFT}
+ID_RIGHT_LEN=${#IDENTITY_RIGHT}
+ID_PADDING=$((LINE_WIDTH - ID_LEFT_LEN - ID_RIGHT_LEN))
+if [ "$ID_PADDING" -lt 1 ]; then ID_PADDING=1; fi
+printf "\n%s%*s%s\n" "$IDENTITY_LEFT" "$ID_PADDING" "" "$IDENTITY_RIGHT"
+echo "$SEPARATOR"
 
-MEMORY_STATUS=""
-if [ "$MEMORY_SYNCED" = "true" ]; then
-  MEMORY_STATUS="◆ memory · synced"
-fi
-
-echo "  ◇ $GREETING_NAME        ⎇ $BRANCH_STATUS        $MEMORY_STATUS"
-
-# --- Health dots ---
-health_symbol() {
-  case "$1" in
-    ok)   printf "✓" ;;
-    fail) printf "✗" ;;
-    *)    printf "—" ;;
-  esac
-}
-
-HEALTH_LINE="  ●"
-HEALTH_LINE="$HEALTH_LINE github $(health_symbol "$HEALTH_GITHUB")"
-HEALTH_LINE="$HEALTH_LINE  git $(health_symbol "$HEALTH_GIT")"
-HEALTH_LINE="$HEALTH_LINE  api-key $(health_symbol "$HEALTH_APIKEY")"
-HEALTH_LINE="$HEALTH_LINE  graph $(health_symbol "$HEALTH_GRAPH")"
-HEALTH_LINE="$HEALTH_LINE  telegram $(health_symbol "$HEALTH_TELEGRAM")"
-echo "$HEALTH_LINE"
-
-# Show /checkup hint if anything failed
-HAS_FAILURE="false"
-for h in "$HEALTH_GITHUB" "$HEALTH_GIT" "$HEALTH_APIKEY" "$HEALTH_GRAPH" "$HEALTH_TELEGRAM"; do
-  if [ "$h" = "fail" ]; then HAS_FAILURE="true"; break; fi
-done
-if [ "$HAS_FAILURE" = "true" ]; then
-  echo "  ⚠ Issues detected — run /checkup to diagnose and fix"
+# --- Team activity (secondary info) ---
+TEAM_JSON=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
+TEAM_COUNT=$(echo "$TEAM_JSON" | jq 'length' 2>/dev/null || echo "0")
+if [ "$TEAM_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_COUNT" != "0" ]; then
+  echo "$TEAM_JSON" | jq -r '.[] | "  \(.author)\t\(.message)\t\(.time)"' 2>/dev/null | while IFS=$'\t' read -r T_AUTHOR T_MSG T_TIME; do
+    # Extract first name only, lowercase
+    T_NAME=$(echo "$T_AUTHOR" | awk '{print tolower($1)}')
+    # Truncate message to fit
+    T_MSG_SHORT=$(echo "$T_MSG" | cut -c1-42)
+    # Right-align time
+    LEFT_PART="  ${T_NAME}    ${T_MSG_SHORT}"
+    LEFT_LEN=${#LEFT_PART}
+    TIME_LEN=${#T_TIME}
+    T_PAD=$((LINE_WIDTH - LEFT_LEN - TIME_LEN))
+    if [ "$T_PAD" -lt 1 ]; then T_PAD=1; fi
+    printf "%s%*s%s\n" "$LEFT_PART" "$T_PAD" "" "$T_TIME"
+  done
 fi
 
 # Show lifecycle events (merged PRs + implemented handoffs)
@@ -893,9 +876,47 @@ if [ -n "$SAVED_BRANCH" ]; then
   echo "  ✓ Auto-saved uncommitted work on $SAVED_BRANCH"
 fi
 
-# Managed repos status
-if [ -n "$REPOS_STATUS" ]; then
-  printf "$REPOS_STATUS"
+# --- Footer: health + repos + memory (tertiary) ---
+echo "$SEPARATOR"
+
+# Build compact footer line
+# Health: show "✓ ready" if all pass, otherwise list failures
+HAS_FAILURE="false"
+FAILED_SERVICES=""
+for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
+  svc="${pair%%:*}"
+  status="${pair#*:}"
+  if [ "$status" = "fail" ]; then
+    HAS_FAILURE="true"
+    FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
+  fi
+done
+
+if [ "$HAS_FAILURE" = "true" ]; then
+  echo "  ⚠${FAILED_SERVICES} — run /checkup"
+else
+  # Compact footer: ready + repos + memory
+  FOOTER_LEFT="  ✓ ready"
+
+  # Add managed repos inline
+  if [ -n "$REPOS_STATUS" ]; then
+    # Extract repo info into compact format (strip ornaments)
+    REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+    if [ -n "$REPOS_COMPACT" ]; then
+      FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+    fi
+  fi
+
+  FOOTER_RIGHT=""
+  if [ "$MEMORY_SYNCED" = "true" ]; then
+    FOOTER_RIGHT="◆ memory synced"
+  fi
+
+  FL_LEN=${#FOOTER_LEFT}
+  FR_LEN=${#FOOTER_RIGHT}
+  F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+  if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+  printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
 fi
 
 # Auto-apply upstream framework updates (bin/, .claude/commands/, CLAUDE.md, skills/)
