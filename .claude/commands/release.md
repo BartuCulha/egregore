@@ -11,6 +11,18 @@ Merge develop into main. Maintainer only.
 7. **Notify** team
 8. **Clean up** merged working branches
 
+## Step 0: Worktree guard
+
+```bash
+[ -f .git ]
+```
+
+If `.git` is a file (not a directory), you're in a worktree. **Stop immediately:**
+
+> `/release` must run from the main repo, not a worktree. Worktrees can't checkout main/develop without conflicting with the main repo. Run `/release` from your main egregore directory.
+
+Do NOT proceed. Do NOT try to checkout main.
+
 ## Step 1: Verify maintainer
 
 ```bash
