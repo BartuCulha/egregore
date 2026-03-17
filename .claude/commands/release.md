@@ -2,19 +2,36 @@ Merge develop into main. Maintainer only.
 
 ## What to do
 
-1. **Verify maintainer**: Only oz can release
-2. **Show summary**: What's on develop since last release
-3. **Confirm** with the user
-4. **Merge** develop → main (no fast-forward)
-5. **Tag** the release
-6. **Sync public** repo (egregore-core)
-7. **Notify** team
-8. **Clean up** merged working branches
+1. **Resolve project dir**: find the main repo (works from worktree or main)
+2. **Verify maintainer**: Only oz can release
+3. **Show summary**: What's on develop since last release
+4. **Confirm** with the user
+5. **Merge** develop → main (no fast-forward)
+6. **Tag** the release
+7. **Sync public** repo (egregore-core)
+8. **Notify** team
+9. **Clean up** merged working branches
+
+## Step 0: Resolve project directory
+
+All git operations in this command use `git -C "$MAIN_DIR"` so `/release` works from anywhere — worktree or main repo.
+
+```bash
+if [ -f .git ]; then
+  # In a worktree — resolve main project dir from .git file
+  WT_GITDIR=$(sed 's/^gitdir: //' .git)
+  MAIN_DIR=$(cd "$WT_GITDIR/../../.." && pwd)
+else
+  MAIN_DIR=$(pwd)
+fi
+```
+
+**Every git command below must use `git -C "$MAIN_DIR"`**. Never use bare `git` — that operates on the worktree, not the main repo.
 
 ## Step 1: Verify maintainer
 
 ```bash
-git config user.name
+git -C "$MAIN_DIR" config user.name
 ```
 
 Map to short name. If not oz: **"Only the maintainer can release. Ask oz to run /release."** Stop here.
@@ -22,8 +39,8 @@ Map to short name. If not oz: **"Only the maintainer can release. Ask oz to run 
 ## Step 2: Show what's on develop
 
 ```bash
-git fetch origin --quiet
-git log origin/main..origin/develop --oneline --no-merges
+git -C "$MAIN_DIR" fetch origin --quiet
+git -C "$MAIN_DIR" log origin/main..origin/develop --oneline --no-merges
 ```
 
 Also check for open PRs to develop:
@@ -51,14 +68,15 @@ Release to main?
 ## Step 4: Merge
 
 ```bash
-git checkout main && git pull origin main --quiet
-git merge develop --no-ff -m "Release: $(date +%Y-%m-%d)"
+git -C "$MAIN_DIR" checkout main --quiet
+git -C "$MAIN_DIR" pull origin main --quiet
+git -C "$MAIN_DIR" merge develop --no-ff -m "Release: $(date +%Y-%m-%d)"
 ```
 
 **If merge conflicts occur** (non-zero exit code): abort and return to develop:
 ```bash
-git merge --abort
-git checkout develop
+git -C "$MAIN_DIR" merge --abort
+git -C "$MAIN_DIR" checkout develop --quiet
 ```
 Tell the user:
 > Merge conflict between main and develop. This usually means a hotfix was applied directly to main.
@@ -66,15 +84,19 @@ Tell the user:
 
 Stop here — do NOT push, tag, or sync.
 
-**If merge succeeds**, push:
+**If merge succeeds**, push and return to develop immediately:
 ```bash
-git push origin main
+git -C "$MAIN_DIR" push origin main
+git -C "$MAIN_DIR" checkout develop --quiet
 ```
+
+Returning to develop right after push ensures the main repo is never left on main.
 
 ## Step 5: Tag
 
 ```bash
-git tag "release/$(date +%Y-%m-%d)" && git push origin --tags
+git -C "$MAIN_DIR" tag "release/$(date +%Y-%m-%d)"
+git -C "$MAIN_DIR" push origin --tags
 ```
 
 If a tag for today already exists, append a counter: `release/2026-02-07-2`
@@ -93,12 +115,7 @@ bash bin/notify.sh group "New release on main: [summary of changes]. Run /pull t
 
 Delete merged `dev/*` remote branches:
 ```bash
-git branch -r --merged origin/main | grep 'origin/dev/' | sed 's|origin/||' | xargs -I{} git push origin --delete {}
-```
-
-Return to develop:
-```bash
-git checkout develop
+git -C "$MAIN_DIR" branch -r --merged origin/main | grep 'origin/dev/' | sed 's|origin/||' | xargs -I{} git -C "$MAIN_DIR" push origin --delete {}
 ```
 
 ## Example
@@ -148,3 +165,5 @@ Done. Main is updated. Team notified.
 - **Always tag** — releases are traceable
 - **Always sync public** — egregore-core stays up to date with main
 - **Always notify** — team knows when main changes
+- **Always use `git -C "$MAIN_DIR"`** — never bare `git`, so it works from worktrees
+- **Always return to develop after merge** — main repo must never be left on main
