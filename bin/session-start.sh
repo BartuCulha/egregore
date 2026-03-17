@@ -760,6 +760,36 @@ fi
     '{merged_prs: $merged, implemented_handoffs: $impl}' 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}'
 ) > "$CTX_DIR/lifecycle" 2>/dev/null &
 
+# 10. Last Pulse brief (background) — gated on feature flag + API key
+(
+  PULSE_ENABLED=$(jq -r '.features.pulse // "false"' "$CONFIG" 2>/dev/null || echo "false")
+  HAS_API_KEY=false
+  if [ -f "$SCRIPT_DIR/.env" ]; then
+    _key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
+    [ -n "$_key" ] && HAS_API_KEY=true
+  fi
+
+  if [ "$PULSE_ENABLED" = "true" ] && [ "$HAS_API_KEY" = "true" ] && [ -n "$GH_USER_LC" ]; then
+    BRIEF_RESULT=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
+      MATCH (p:Person {github: \$gh})
+      WHERE p.lastBrief IS NOT NULL
+        AND p.lastBriefDate >= date() - duration('P7D')
+      RETURN p.lastBrief, toString(p.lastBriefDate), p.lastRecommendations
+    " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null || echo '{"values":[]}')
+    BRIEF=$(echo "$BRIEF_RESULT" | jq -r '.values[0][0] // empty' 2>/dev/null || true)
+    BRIEF_DATE=$(echo "$BRIEF_RESULT" | jq -r '.values[0][1] // empty' 2>/dev/null || true)
+    RECS=$(echo "$BRIEF_RESULT" | jq -c '.values[0][2] // []' 2>/dev/null || echo '[]')
+    if [ -n "$BRIEF" ]; then
+      jq -n --arg brief "$BRIEF" --arg date "$BRIEF_DATE" --argjson recs "$RECS" \
+        '{brief: $brief, date: $date, recommendations: $recs}'
+    else
+      echo '{}'
+    fi
+  else
+    echo '{}'
+  fi
+) > "$CTX_DIR/pulse_brief" 2>/dev/null &
+
 # Wait for all context gathering + health checks to finish
 wait
 
@@ -914,6 +944,7 @@ CONTEXT_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
 CONTEXT_TEAM=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
 CONTEXT_SOUL=$(cat "$CTX_DIR/soul_summary" 2>/dev/null || echo "")
 CONTEXT_LIFECYCLE=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}')
+CONTEXT_PULSE=$(cat "$CTX_DIR/pulse_brief" 2>/dev/null || echo '{}')
 
 # --- Write compact subagent context cache (reuses already-gathered data) ---
 SUBAGENT_CTX="/tmp/egregore-subagent-ctx-${EGREGORE_SESSION_ID}.txt"
@@ -956,7 +987,8 @@ cat << CTXEOF
   "last_user_activity": "$CONTEXT_ACTIVITY",
   "team_recent_memory": $CONTEXT_TEAM,
   "soul_self_summary": "$CONTEXT_SOUL",
-  "lifecycle": $CONTEXT_LIFECYCLE
+  "lifecycle": $CONTEXT_LIFECYCLE,
+  "pulse": $CONTEXT_PULSE
 }
 -->
 CTXEOF
