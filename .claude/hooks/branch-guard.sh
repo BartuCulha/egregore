@@ -18,20 +18,28 @@ case "$BRANCH" in
   *) exit 0 ;;
 esac
 
-# --- Maintainer fast-path ---
-# Founders/maintainers can push directly to develop (not main).
-# This unblocks shipping fixes without waiting on PR reviews.
-# main is always protected — use /release for that.
-USAGE_TYPE=$(jq -r '.usage_type // empty' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || true
-if [[ "$USAGE_TYPE" == "founder_group" || "$USAGE_TYPE" == "founder_solo" ]] && [[ "$BRANCH" == "develop" ]]; then
-  exit 0
-fi
-
-# --- Read tool input from stdin ---
+# --- Read tool input from stdin (before fast-path so we can check tool) ---
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
 
 if [ -z "$TOOL_NAME" ]; then
+  exit 0
+fi
+
+# --- EnterPlanMode is ALWAYS blocked on protected branches (no exceptions) ---
+# Everyone must create a branch before planning or working, including founders.
+if [[ "$TOOL_NAME" == "EnterPlanMode" ]]; then
+  AUTHOR=$(jq -r '.display_name // .name // "dev"' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || AUTHOR="dev"
+  echo "Protected branch: create a working branch first. Run: git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop" >&2
+  exit 2
+fi
+
+# --- Maintainer fast-path ---
+# Founders/maintainers can edit/commit directly on develop (not main).
+# This unblocks shipping fixes without waiting on PR reviews.
+# main is always protected — use /release for that.
+USAGE_TYPE=$(jq -r '.usage_type // empty' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || true
+if [[ "$USAGE_TYPE" == "founder_group" || "$USAGE_TYPE" == "founder_solo" ]] && [[ "$BRANCH" == "develop" ]]; then
   exit 0
 fi
 
@@ -169,12 +177,6 @@ case "$TOOL_NAME" in
       echo "$BLOCK_MSG" >&2
       exit 2
     fi
-    ;;
-
-  EnterPlanMode)
-    # Block plan mode on protected branches — forces branch creation first
-    echo "$BLOCK_MSG" >&2
-    exit 2
     ;;
 
   *)
