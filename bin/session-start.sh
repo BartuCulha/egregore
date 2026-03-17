@@ -871,7 +871,7 @@ else
   # Add managed repos inline
   if [ -n "$REPOS_STATUS" ]; then
     # Extract repo info into compact format (strip ornaments)
-    REPOS_COMPACT=$(printf "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+    REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
     if [ -n "$REPOS_COMPACT" ]; then
       FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
     fi
