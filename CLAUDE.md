@@ -22,10 +22,12 @@ The hook output is already in your context. It looks like this:
   ███████╗╚██████╔╝██║  ██║███████╗╚██████╔╝╚██████╔╝██║  ██║███████╗
   ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝
 
-  New session started.
-  Branch: dev/alice/2026-02-07-session
-  Develop: synced
-  Memory: synced
+  Acme-Corp/egregore                     alice · develop · 2↑
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+  bob     Refactored auth middleware                      2 hours ago
+  alice   Fixed session naming bug                        yesterday
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+  ✓ ready                                          ◆ memory synced
 ```
 
 **Display it exactly as-is** (preserve the ASCII art formatting), then ask: **"What are you working on?"**
