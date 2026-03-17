@@ -171,6 +171,12 @@ case "$TOOL_NAME" in
     fi
     ;;
 
+  EnterPlanMode)
+    # Block plan mode on protected branches — forces branch creation first
+    echo "$BLOCK_MSG" >&2
+    exit 2
+    ;;
+
   *)
     exit 0
     ;;
