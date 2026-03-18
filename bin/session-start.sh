@@ -147,40 +147,45 @@ if [ "$ONBOARDING_COMPLETE" != "true" ]; then
   exit 0
 fi
 
-# --- Auto-provision or fix EGREGORE_API_KEY (background, non-blocking) ---
+# --- Detect local mode and auto-provision API key ---
 ENV_FILE="$SCRIPT_DIR/.env"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
-# Check if key is missing OR if the key's slug doesn't match egregore.json slug
+# Detect local mode: no api_url in egregore.json means intentionally local/OSS
+LOCAL_MODE="false"
+API_URL_CONFIGURED=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+if [ -z "$API_URL_CONFIGURED" ]; then
+  LOCAL_MODE="true"
+fi
+
+# In local mode, skip all key validation and auto-fix
 KEY_NEEDS_FIX="false"
-if [ -f "$ENV_FILE" ]; then
-  CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
-  EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
-  if [ -z "$CURRENT_KEY" ]; then
-    KEY_NEEDS_FIX="true"
-  elif [ -n "$EXPECTED_SLUG" ]; then
-    # Extract slug from key: ek_<slug>_<secret> → <slug>
-    KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
-    if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+HEALTH_APIKEY="skip"
+
+if [ "$LOCAL_MODE" != "true" ]; then
+  # Check if key is missing OR if the key's slug doesn't match egregore.json slug
+  if [ -f "$ENV_FILE" ]; then
+    CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+    EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
+    if [ -z "$CURRENT_KEY" ]; then
       KEY_NEEDS_FIX="true"
+    elif [ -n "$EXPECTED_SLUG" ]; then
+      # Extract slug from key: ek_<slug>_<secret> → <slug>
+      KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+      if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+        KEY_NEEDS_FIX="true"
+      fi
     fi
   fi
-fi
 
-# Track API key health
-if [ "$KEY_NEEDS_FIX" = "true" ]; then
-  HEALTH_APIKEY="fail"
-elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
-  HEALTH_APIKEY="ok"
-else
-  HEALTH_APIKEY="fail"
-fi
-
-# Detect local mode: no API key at all (not broken key — intentionally unconfigured)
-LOCAL_MODE="false"
-if [ "$HEALTH_APIKEY" = "fail" ] && [ "$KEY_NEEDS_FIX" != "true" ]; then
-  # No .env or no EGREGORE_API_KEY line — this is local/OSS mode
-  LOCAL_MODE="true"
+  # Track API key health
+  if [ "$KEY_NEEDS_FIX" = "true" ]; then
+    HEALTH_APIKEY="fail"
+  elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
+    HEALTH_APIKEY="ok"
+  else
+    HEALTH_APIKEY="fail"
+  fi
 fi
 
 if [ "$KEY_NEEDS_FIX" = "true" ]; then
