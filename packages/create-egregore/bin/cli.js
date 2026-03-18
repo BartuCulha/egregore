@@ -3,9 +3,10 @@
 /**
  * create-egregore — Set up Egregore in one command.
  *
- * Two modes:
- *   npx create-egregore --token st_xxxx   (from website — primary path)
- *   npx create-egregore                    (terminal-only fallback)
+ * Three modes:
+ *   npx create-egregore --token st_xxxx   (from website — connected mode)
+ *   npx create-egregore                    (local mode — founder)
+ *   npx create-egregore join <org>         (local mode — join existing)
  */
 
 const ui = require("../lib/ui");
@@ -17,6 +18,7 @@ const API_URL = process.env.EGREGORE_API_URL || "https://egregore-production-55f
 
 function parseArgs(argv) {
   const args = {};
+  const positional = [];
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--token" && argv[i + 1]) {
       args.token = argv[++i];
@@ -26,7 +28,13 @@ function parseArgs(argv) {
       args.api = argv[++i];
     } else if (argv[i] === "--help" || argv[i] === "-h") {
       args.help = true;
+    } else if (!argv[i].startsWith("-")) {
+      positional.push(argv[i]);
     }
+  }
+  if (positional[0] === "join") {
+    args.subcommand = "join";
+    args.joinOrg = positional[1];
   }
   return args;
 }
@@ -34,8 +42,9 @@ function parseArgs(argv) {
 function showHelp() {
   ui.banner();
   ui.info("Usage:");
-  ui.info("  npx create-egregore --token <setup-token>   Install from website");
-  ui.info("  npx create-egregore                          Interactive setup");
+  ui.info("  npx create-egregore                          New project (local mode)");
+  ui.info("  npx create-egregore join <org>               Join existing project");
+  ui.info("  npx create-egregore --token <setup-token>    Install from website");
   ui.info("");
   ui.info("Options:");
   ui.info("  --token <token>   Setup token from egregore.xyz");
@@ -52,16 +61,24 @@ async function main() {
     process.exit(0);
   }
 
-  const api = new EgregoreAPI(args.api || API_URL);
-
   ui.banner();
 
   if (args.token) {
-    // ===== Website flow: token provided =====
+    // ===== Connected mode: token provided (unchanged) =====
+    const api = new EgregoreAPI(args.api || API_URL);
     await tokenFlow(api, args.token);
+  } else if (args.subcommand === "join") {
+    // ===== Local mode: join existing =====
+    if (!args.joinOrg) {
+      ui.error("Usage: npx create-egregore join <github-org>");
+      process.exit(1);
+    }
+    const { localJoinFlow } = require("../lib/local");
+    await localJoinFlow(args.joinOrg, ui);
   } else {
-    // ===== Terminal fallback: interactive =====
-    await interactiveFlow(api);
+    // ===== Local mode: founder =====
+    const { localFounderFlow } = require("../lib/local");
+    await localFounderFlow(ui);
   }
 }
 
