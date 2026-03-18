@@ -10,7 +10,10 @@
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
 # --- Get current branch ---
-BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+# In a worktree, CWD is the worktree — git without -C returns the correct branch.
+# Fallback to -C PROJECT_DIR for non-worktree contexts.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || \
+  BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 
 # Only guard protected branches
 case "$BRANCH" in
