@@ -365,15 +365,34 @@ done
 # Wait for all fetches
 wait 2>/dev/null || true
 
-# --- Worktree orphan cleanup (background, non-blocking) ---
-bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+# --- Worktree orphan cleanup (background, throttled to max once/hour) ---
+_CLEANUP_MARKER="/tmp/egregore-cleanup-last-$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)"
+_RUN_CLEANUP="false"
+if [ ! -f "$_CLEANUP_MARKER" ]; then
+  _RUN_CLEANUP="true"
+else
+  _CM_MTIME=$(stat -f %m "$_CLEANUP_MARKER" 2>/dev/null || stat -c %Y "$_CLEANUP_MARKER" 2>/dev/null || echo "0")
+  _CM_NOW=$(date +%s)
+  [ $((_CM_NOW - _CM_MTIME)) -gt 3600 ] 2>/dev/null && _RUN_CLEANUP="true"
+fi
+if [ "$_RUN_CLEANUP" = "true" ]; then
+  touch "$_CLEANUP_MARKER" 2>/dev/null || true
+  bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+fi
 
 # --- Clean up stale worktree cleanup markers (from crashed sessions) ---
 (
+  _MK_NOW=$(date +%s)
   for MARKER_FILE in "$HOME/.egregore"/worktree-cleanup-*.marker; do
     [ -f "$MARKER_FILE" ] || continue
     WT_MARKER_PATH=$(cat "$MARKER_FILE" 2>/dev/null)
     if [ -n "$WT_MARKER_PATH" ] && [ -d "$WT_MARKER_PATH" ]; then
+      # Skip worktrees younger than 1 hour
+      _MK_MTIME=$(stat -f %m "$WT_MARKER_PATH" 2>/dev/null || stat -c %Y "$WT_MARKER_PATH" 2>/dev/null || echo "$_MK_NOW")
+      _MK_AGE=$((_MK_NOW - _MK_MTIME))
+      if [ "$_MK_AGE" -lt 3600 ] 2>/dev/null; then
+        continue
+      fi
       PID_FILE="$WT_MARKER_PATH/.egregore-worktree-pid"
       if [ -f "$PID_FILE" ]; then
         STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
