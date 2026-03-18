@@ -9,6 +9,11 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# --- Guard: if project dir no longer exists (worktree deleted), allow gracefully ---
+if [ ! -d "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
 # --- Get current branch ---
 # In a worktree, CWD is the worktree — git without -C returns the correct branch.
 # Fallback to -C PROJECT_DIR for non-worktree contexts.
