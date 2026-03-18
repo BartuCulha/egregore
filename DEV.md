@@ -291,7 +291,7 @@ If someone creates an org and the invite/accept flow can't find the API key:
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app secret | For web auth flow |
 | `TELEGRAM_BOT_TOKEN` | Shared Telegram bot | All orgs share one bot |
 | `EGREGORE_API_URL` | Public API URL | `https://egregore-production-55f2.up.railway.app` |
-| `EGREGORE_SITE_URL` | Frontend URL | `https://egregore-core.netlify.app` |
+| `EGREGORE_SITE_URL` | Frontend URL | `https://egregore.xyz` |
 | `CORS_ORIGINS` | Allowed browser origins | Comma-separated |
 
 ---

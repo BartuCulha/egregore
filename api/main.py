@@ -903,7 +903,7 @@ async def org_claim(token: str):
 async def org_install_script(token: str):
     """Return a bash install script for users without Node.js.
 
-    Usage: curl -fsSL https://egregore-core.netlify.app/api/org/install/st_xxx | bash
+    Usage: curl -fsSL https://egregore.xyz/api/org/install/st_xxx | bash
     """
     from fastapi.responses import PlainTextResponse
 
@@ -1777,7 +1777,7 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
             logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{repo_name}")
 
     # Create invite token (7-day TTL)
-    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
+    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore.xyz")
     invite_token = create_invite_token({
         "github_org": owner,
         "org_name": org_name,
@@ -1898,11 +1898,19 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     # Get API key from server config (not from egregore.json — secrets don't go in git)
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
-    # Pass the user's GitHub token from website OAuth (has repo,read:org scope)
+    # Check if the user's token can actually access the repo (website OAuth may
+    # have insufficient scope, e.g. read:user only). If not, tell the CLI to run
+    # its own device flow which requests repo,read:org.
+    token_has_repo_access = config is not None  # config was read with this token above
+    if not token_has_repo_access:
+        # Double-check: maybe config read failed for another reason
+        token_has_repo_access = await gh.repo_exists(token, owner, invite_repo_name)
+
     setup_token = create_token({
         "fork_url": fork_url,
         "memory_url": memory_url,
-        "github_token": token,
+        "github_token": token if token_has_repo_access else "",
+        "needs_cli_auth": not token_has_repo_access,
         "api_key": api_key,
         "api_url": api_url,
         "org_name": org_name,
