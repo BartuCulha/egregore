@@ -176,6 +176,13 @@ else
   HEALTH_APIKEY="fail"
 fi
 
+# Detect local mode: no API key at all (not broken key — intentionally unconfigured)
+LOCAL_MODE="false"
+if [ "$HEALTH_APIKEY" = "fail" ] && [ "$KEY_NEEDS_FIX" != "true" ]; then
+  # No .env or no EGREGORE_API_KEY line — this is local/OSS mode
+  LOCAL_MODE="true"
+fi
+
 if [ "$KEY_NEEDS_FIX" = "true" ]; then
   (
     GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
@@ -736,7 +743,9 @@ fi
 
 # 7. Graph health (background — zero added latency, runs in parallel)
 (
-  if bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
     echo "ok"
   else
     echo "fail"
@@ -745,7 +754,9 @@ fi
 
 # 8. Telegram health (background)
 (
-  if bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
     echo "ok"
   else
     echo "fail"
@@ -854,7 +865,11 @@ GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
 
 # Build identity line: Org/repo on left, user + branch on right
-IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+if [ "$LOCAL_MODE" = "true" ]; then
+  IDENTITY_LEFT="  Egregore (local mode)"
+else
+  IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+fi
 BRANCH_COMPACT="$BRANCH"
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
   BRANCH_COMPACT="${BRANCH} · ${COMMITS_AHEAD}↑"
@@ -908,43 +923,79 @@ fi
 echo "$SEPARATOR"
 
 # Build compact footer line
-# Health: show "✓ ready" if all pass, otherwise list failures
-HAS_FAILURE="false"
-FAILED_SERVICES=""
-for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
-  svc="${pair%%:*}"
-  status="${pair#*:}"
-  if [ "$status" = "fail" ]; then
-    HAS_FAILURE="true"
-    FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
-  fi
-done
-
-if [ "$HAS_FAILURE" = "true" ]; then
-  echo "  ⚠${FAILED_SERVICES} — run /checkup"
-else
-  # Compact footer: ready + repos + memory
-  FOOTER_LEFT="  ✓ ready"
-
-  # Add managed repos inline
-  if [ -n "$REPOS_STATUS" ]; then
-    # Extract repo info into compact format (strip ornaments)
-    REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
-    if [ -n "$REPOS_COMPACT" ]; then
-      FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+if [ "$LOCAL_MODE" = "true" ]; then
+  # Local mode: only check github + git, skip api-key/graph/telegram
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
     fi
-  fi
+  done
 
-  FOOTER_RIGHT=""
-  if [ "$MEMORY_SYNCED" = "true" ]; then
-    FOOTER_RIGHT="◆ memory synced"
-  fi
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
+  else
+    FOOTER_LEFT="  ✓ local"
 
-  FL_LEN=${#FOOTER_LEFT}
-  FR_LEN=${#FOOTER_RIGHT}
-  F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
-  if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
-  printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT="/connect to enable graph + dashboard"
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+  fi
+else
+  # Connected mode: check all services
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
+    fi
+  done
+
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
+  else
+    # Compact footer: ready + repos + memory
+    FOOTER_LEFT="  ✓ ready"
+
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      # Extract repo info into compact format (strip ornaments)
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT=""
+    if [ "$MEMORY_SYNCED" = "true" ]; then
+      FOOTER_RIGHT="◆ memory synced"
+    fi
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+  fi
 fi
 
 # Framework updates come through PRs to develop — no separate auto-update channel.
