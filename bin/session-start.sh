@@ -92,7 +92,35 @@ else
           fi
           FIRST_SESSION="false"
         else
-          cat > "$STATE_FILE" << STATEEOF
+          # No state file — check graph to see if this person already exists
+          # (handles fresh clone / new machine for existing team members)
+          GRAPH_PERSON=""
+          GRAPH_DISPLAY_NAME=""
+          GRAPH_PERSON=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+            "MATCH (p:Person {github: \$github}) RETURN p.name AS name" \
+            "{\"github\":\"$GH_LOGIN\"}" 2>/dev/null || echo "")
+          if echo "$GRAPH_PERSON" | jq -e '.values | length > 0' &>/dev/null; then
+            GRAPH_DISPLAY_NAME=$(echo "$GRAPH_PERSON" | jq -r '.values[0][0] // empty' 2>/dev/null)
+            # Existing team member — skip onboarding
+            cat > "$STATE_FILE" << STATEEOF
+{
+  "github_username": "$GH_LOGIN",
+  "github_name": "${GH_NAME:-$GH_LOGIN}",
+  "name": "${GRAPH_DISPLAY_NAME:-${GH_NAME:-$GH_LOGIN}}",
+  "display_name": "${GRAPH_DISPLAY_NAME:-}",
+  "onboarding_complete": true,
+  "usage_type": "$USAGE_TYPE",
+  "session_tracking": true,
+  "transcript_sharing": true,
+  "telemetry": true,
+  "contact_preference": "all",
+  "telemetry_noticed": true
+}
+STATEEOF
+            FIRST_SESSION="false"
+          else
+            # Genuinely new user — trigger onboarding
+            cat > "$STATE_FILE" << STATEEOF
 {
   "github_username": "$GH_LOGIN",
   "github_name": "${GH_NAME:-$GH_LOGIN}",
@@ -102,7 +130,8 @@ else
   "first_session": true
 }
 STATEEOF
-          FIRST_SESSION="true"
+            FIRST_SESSION="true"
+          fi
         fi
       fi
     fi
