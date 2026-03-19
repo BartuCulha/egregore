@@ -47,7 +47,7 @@ function showHelp() {
   ui.info("Usage:");
   ui.info("  npx create-egregore                          Interactive setup (API)");
   ui.info("  npx create-egregore --local                  New project (local mode)");
-  ui.info("  npx create-egregore join <org>               Join existing project");
+  ui.info("  npx create-egregore join <org>[/<repo>]       Join existing project");
   ui.info("  npx create-egregore --token <setup-token>    Install from website");
   ui.info("");
   ui.info("Options:");
