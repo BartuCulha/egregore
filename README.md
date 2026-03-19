@@ -21,7 +21,7 @@ A shared intelligence layer for organizations using Claude Code. Persistent memo
 Visit [egregore.xyz](https://egregore.xyz), sign in with GitHub, pick your org and repos, then run the one-liner it gives you:
 
 ```bash
-npx create-egregore --token st_xxx
+npx create-egregore@latest --token st_xxx
 ```
 
 Or without Node.js:
@@ -37,7 +37,7 @@ Got an invite link? Open it, sign in with GitHub, and you'll get the same one-li
 ### Interactive (no website)
 
 ```bash
-npx create-egregore
+npx create-egregore@latest
 ```
 
 Walks you through GitHub auth, org selection, and repo setup in the terminal.
@@ -47,7 +47,7 @@ Walks you through GitHub auth, org selection, and repo setup in the terminal.
 Set up Egregore using only GitHub — no API server, no account required:
 
 ```bash
-npx create-egregore --local
+npx create-egregore@latest --local
 ```
 
 This creates repos under your GitHub org, sets up shared memory, and configures everything locally. Uses GitHub device flow for auth.
@@ -61,7 +61,7 @@ To invite someone:
 They join with:
 
 ```bash
-npx create-egregore join <your-github-org>
+npx create-egregore@latest join <your-github-org>
 ```
 
 Local mode works entirely on the filesystem — no knowledge graph, no Telegram, no dashboard. Run `/connect` later to enable those features.
