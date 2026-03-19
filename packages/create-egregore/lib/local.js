@@ -237,9 +237,14 @@ async function localFounderFlow(ui) {
     } catch {}
   }
 
-  // 6. Create egregore repo from template
-  const repoName = "egregore";
-  const memoryRepoName = `${githubOrg}-memory`;
+  // 6. Derive repo names from team name
+  const slug = orgName
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "egregore";
+  const repoName = slug;
+  const memoryRepoName = `${slug}-memory`;
 
   // Guard: if egregore repo already exists with a config, don't overwrite
   console.log("");
@@ -248,12 +253,12 @@ async function localFounderFlow(ui) {
   if (egreExists) {
     const existingConfig = await getFileContent(githubToken, githubOrg, repoName, "egregore.json");
     if (existingConfig) {
-      s1.stop(`${githubOrg} already has Egregore set up`);
+      s1.stop(`${githubOrg}/${repoName} already has Egregore set up`);
       console.log("");
-      ui.info("To join the existing Egregore:");
-      ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}`)}`);
+      ui.info("To join it:");
+      ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}/${repoName}`)}`);
       console.log("");
-      ui.info("To set up a new one, pick a different GitHub org.");
+      ui.info("To set up a different one, choose a different team name.");
       process.exit(0);
     }
     s1.stop("Egregore repo exists but has no config — using it");
@@ -474,7 +479,7 @@ async function localFounderFlow(ui) {
         invSpin.stop(`Invited ${invUsername}`);
         console.log("");
         ui.info(`Tell them to run:`);
-        ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}`)}`);
+        ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}/${repoName}`)}`);
       } catch (err) {
         invSpin.fail(`Could not invite ${invUsername}: ${err.message}`);
       }
@@ -498,7 +503,16 @@ async function localFounderFlow(ui) {
 
 // ── Flow 2: Join (local mode) ──────────────────────────────────────
 
-async function localJoinFlow(orgLogin, ui) {
+async function localJoinFlow(orgArg, ui) {
+  // Parse org/repo if provided (e.g., "acme-org/ops-team")
+  let orgLogin, explicitRepo;
+  if (orgArg.includes("/")) {
+    [orgLogin, explicitRepo] = orgArg.split("/", 2);
+  } else {
+    orgLogin = orgArg;
+    explicitRepo = null;
+  }
+
   // 1. GitHub auth
   ui.info(`Joining ${ui.bold(orgLogin)}. First, sign in with GitHub.\n`);
   let githubToken;
@@ -522,15 +536,24 @@ async function localJoinFlow(orgLogin, ui) {
   // 4. Find egregore repo
   const s2 = ui.spinner(`Looking for egregore in ${orgLogin}...`);
   let repoName = null;
-  for (const candidate of ["egregore", "egregore-core"]) {
-    if (await repoExists(githubToken, orgLogin, candidate)) {
-      repoName = candidate;
-      break;
+  if (explicitRepo) {
+    // User specified org/repo — use it directly
+    if (await repoExists(githubToken, orgLogin, explicitRepo)) {
+      repoName = explicitRepo;
+    }
+  } else {
+    // Search for known repo names
+    for (const candidate of ["egregore", "egregore-core"]) {
+      if (await repoExists(githubToken, orgLogin, candidate)) {
+        repoName = candidate;
+        break;
+      }
     }
   }
   if (!repoName) {
-    s2.fail(`No egregore repo found in ${orgLogin}`);
+    s2.fail(`No egregore repo found in ${orgLogin}${explicitRepo ? `/${explicitRepo}` : ""}`);
     ui.error("Make sure the org admin has set up Egregore and invited you.");
+    ui.info("If the repo has a custom name, use: npx create-egregore join <org>/<repo>");
     process.exit(1);
   }
 
