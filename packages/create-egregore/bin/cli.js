@@ -13,7 +13,7 @@
 const ui = require("../lib/ui");
 const { EgregoreAPI } = require("../lib/api");
 const { deviceFlow } = require("../lib/auth");
-const { install } = require("../lib/setup");
+const { install, ghApi } = require("../lib/setup");
 
 const API_URL = process.env.EGREGORE_API_URL || "https://egregore-production-55f2.up.railway.app";
 
@@ -253,6 +253,35 @@ async function setupFlow(api, githubToken, choice) {
     }
   } catch {
     // Non-fatal — continue without repos
+  }
+
+  // Offer to create a new project repo
+  console.log("");
+  const newRepoName = await ui.prompt("Create a new project repo? Enter name (or press Enter to skip):");
+  if (newRepoName) {
+    const repoSlug = newRepoName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (repoSlug) {
+      const s2 = ui.spinner(`Creating ${repoSlug}...`);
+      try {
+        const apiPath = choice.is_personal ? "/user/repos" : `/orgs/${choice.login}/repos`;
+        const { status } = await ghApi("POST", apiPath, githubToken, {
+          name: repoSlug,
+          private: true,
+          auto_init: true,
+        });
+        if (status === 201 || status === 200) {
+          selectedRepos.push(repoSlug);
+          s2.stop(`Created ${repoSlug}`);
+        } else if (status === 422) {
+          selectedRepos.push(repoSlug);
+          s2.stop(`${repoSlug} already exists — added to managed repos`);
+        } else {
+          s2.fail(`Could not create ${repoSlug}`);
+        }
+      } catch (err) {
+        s2.fail(`Could not create ${repoSlug}: ${err.message}`);
+      }
+    }
   }
 
   // Transcript sharing consent
