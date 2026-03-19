@@ -331,27 +331,31 @@ async function localFounderFlow(ui) {
 
   // 7b. Create project repo (if requested)
   if (newProjectRepo) {
-    if (newProjectRepo === repoName || newProjectRepo === memoryRepoName) {
-      ui.warn(`"${newProjectRepo}" conflicts with Egregore repo names — skipping`);
-      newProjectRepo = null;
+    // Re-prompt if name conflicts with core/memory repo
+    while (newProjectRepo === repoName || newProjectRepo === memoryRepoName) {
+      ui.warn(`"${newProjectRepo}" is already used by your Egregore instance. Pick a different name.`);
+      const retry = await ui.prompt("Repo name (or Enter to skip):");
+      if (!retry) { newProjectRepo = null; break; }
+      newProjectRepo = retry.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    }
+  }
+  if (newProjectRepo) {
+    const s3 = ui.spinner(`Creating ${newProjectRepo}...`);
+    const projExists = await repoExists(githubToken, githubOrg, newProjectRepo);
+    if (projExists) {
+      selectedRepos.push(newProjectRepo);
+      s3.stop(`${newProjectRepo} already exists — added to managed repos`);
     } else {
-      const s3 = ui.spinner(`Creating ${newProjectRepo}...`);
-      const projExists = await repoExists(githubToken, githubOrg, newProjectRepo);
-      if (projExists) {
-        selectedRepos.push(newProjectRepo);
-        s3.stop(`${newProjectRepo} already exists — added to managed repos`);
-      } else {
-        try {
-          await createRepo(githubToken, githubOrg, newProjectRepo, isOrg, description || "");
-          if (await waitForRepo(githubToken, githubOrg, newProjectRepo)) {
-            selectedRepos.push(newProjectRepo);
-            s3.stop(`Created ${newProjectRepo}`);
-          } else {
-            s3.fail(`${newProjectRepo} creation timed out`);
-          }
-        } catch (err) {
-          s3.fail(`Could not create ${newProjectRepo}: ${err.message}`);
+      try {
+        await createRepo(githubToken, githubOrg, newProjectRepo, isOrg, description || "");
+        if (await waitForRepo(githubToken, githubOrg, newProjectRepo)) {
+          selectedRepos.push(newProjectRepo);
+          s3.stop(`Created ${newProjectRepo}`);
+        } else {
+          s3.fail(`${newProjectRepo} creation timed out`);
         }
+      } catch (err) {
+        s3.fail(`Could not create ${newProjectRepo}: ${err.message}`);
       }
     }
   }
