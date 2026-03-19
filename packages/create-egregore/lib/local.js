@@ -241,11 +241,22 @@ async function localFounderFlow(ui) {
   const repoName = "egregore";
   const memoryRepoName = `${githubOrg}-memory`;
 
+  // Guard: if egregore repo already exists with a config, don't overwrite
   console.log("");
-  const s1 = ui.spinner("Creating egregore repo...");
+  const s1 = ui.spinner("Checking for existing Egregore...");
   const egreExists = await repoExists(githubToken, githubOrg, repoName);
   if (egreExists) {
-    s1.stop("Egregore repo already exists — using it");
+    const existingConfig = await getFileContent(githubToken, githubOrg, repoName, "egregore.json");
+    if (existingConfig) {
+      s1.stop(`${githubOrg} already has Egregore set up`);
+      console.log("");
+      ui.info("To join the existing Egregore:");
+      ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}`)}`);
+      console.log("");
+      ui.info("To set up a new one, pick a different GitHub org.");
+      process.exit(0);
+    }
+    s1.stop("Egregore repo exists but has no config — using it");
   } else {
     try {
       await createFromTemplate(githubToken, githubOrg, repoName, description);
