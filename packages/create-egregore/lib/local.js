@@ -19,8 +19,9 @@ const {
 } = require("./setup");
 
 // Template repo for new egregore instances
-const TEMPLATE_OWNER = "egregore-ai";
-const TEMPLATE_REPO = "egregore";
+// TODO: Change to egregore-ai/egregore when OSS repo exists
+const TEMPLATE_OWNER = "Curve-Labs";
+const TEMPLATE_REPO = "egregore-core";
 
 // ── GitHub API helpers ──────────────────────────────────────────────
 
@@ -400,7 +401,31 @@ async function localFounderFlow(ui) {
   registerInstance(repoName, orgName, egregoreDir);
   const alias = await installShellAlias(egregoreDir, ui);
 
-  // 18. Optional invite
+  // 18. Telegram group setup (optional)
+  console.log("");
+  ui.info("Egregore can send notifications to a Telegram group.");
+  ui.info("Create a group, add @egregore_bot, and paste the invite link.");
+  console.log("");
+  const telegramLink = await ui.prompt("Telegram group invite link (Enter to skip):");
+  if (telegramLink) {
+    egreConfig.telegram_group_link = telegramLink;
+    // Update local egregore.json
+    fs.writeFileSync(path.join(egregoreDir, "egregore.json"), JSON.stringify(egreConfig, null, 2) + "\n");
+    // Push to remote so joiners see it
+    try {
+      await putFileContent(
+        githubToken,
+        githubOrg,
+        repoName,
+        "egregore.json",
+        JSON.stringify(egreConfig, null, 2) + "\n",
+        "Add Telegram group link",
+      );
+    } catch {}
+    ui.success("Telegram group link saved");
+  }
+
+  // 19. Optional invite
   console.log("");
   const inviteAnswer = await ui.prompt("Know someone who'd find this useful? [y/N]:");
   if (inviteAnswer && inviteAnswer.toLowerCase() === "y") {
@@ -583,7 +608,14 @@ async function localJoinFlow(orgLogin, ui) {
     }
   }
 
-  // 12. Check for welcome note
+  // 12. Show Telegram group link if available
+  if (config.telegram_group_link) {
+    console.log("");
+    ui.info("Join the team's Telegram group for notifications:");
+    ui.info(`  ${ui.cyan(config.telegram_group_link)}`);
+  }
+
+  // 13. Check for welcome note
   const welcomeFile = path.join(memoryDir, "people", `${user.login}.md`);
   if (fs.existsSync(welcomeFile)) {
     try {
@@ -599,7 +631,7 @@ async function localJoinFlow(orgLogin, ui) {
     } catch {}
   }
 
-  // 13. Done
+  // 14. Done
   console.log("");
   ui.success(`Joined ${ui.bold(orgName)}`);
   console.log("");

@@ -3,9 +3,10 @@
 /**
  * create-egregore — Set up Egregore in one command.
  *
- * Three modes:
+ * Four modes:
  *   npx create-egregore --token st_xxxx   (from website — connected mode)
- *   npx create-egregore                    (local mode — founder)
+ *   npx create-egregore                    (interactive — API-based, existing)
+ *   npx create-egregore --local            (local mode — founder, no API)
  *   npx create-egregore join <org>         (local mode — join existing)
  */
 
@@ -26,6 +27,8 @@ function parseArgs(argv) {
       args.token = argv[i].split("=")[1];
     } else if (argv[i] === "--api" && argv[i + 1]) {
       args.api = argv[++i];
+    } else if (argv[i] === "--local") {
+      args.local = true;
     } else if (argv[i] === "--help" || argv[i] === "-h") {
       args.help = true;
     } else if (!argv[i].startsWith("-")) {
@@ -42,11 +45,13 @@ function parseArgs(argv) {
 function showHelp() {
   ui.banner();
   ui.info("Usage:");
-  ui.info("  npx create-egregore                          New project (local mode)");
+  ui.info("  npx create-egregore                          Interactive setup (API)");
+  ui.info("  npx create-egregore --local                  New project (local mode)");
   ui.info("  npx create-egregore join <org>               Join existing project");
   ui.info("  npx create-egregore --token <setup-token>    Install from website");
   ui.info("");
   ui.info("Options:");
+  ui.info("  --local           Local mode — no API server needed");
   ui.info("  --token <token>   Setup token from egregore.xyz");
   ui.info("  --api <url>       API URL override");
   ui.info("  -h, --help        Show this help");
@@ -75,10 +80,14 @@ async function main() {
     }
     const { localJoinFlow } = require("../lib/local");
     await localJoinFlow(args.joinOrg, ui);
-  } else {
-    // ===== Local mode: founder =====
+  } else if (args.local) {
+    // ===== Local mode: founder (explicit opt-in) =====
     const { localFounderFlow } = require("../lib/local");
     await localFounderFlow(ui);
+  } else {
+    // ===== Interactive API flow (default — existing behavior) =====
+    const api = new EgregoreAPI(args.api || API_URL);
+    await interactiveFlow(api);
   }
 }
 
