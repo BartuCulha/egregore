@@ -249,17 +249,12 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 
 ### Content Ingestion
 
-#### `granola.sh`
-- **Purpose**: Local cache reader for Granola meetings (no auth, no network)
-- **Reads**: `.egregore-state.json` (granola_folders)
-- **Writes**: Nothing
-- **External deps**: jq
-
-#### `granola-api.sh`
-- **Purpose**: API client for Granola's WorkOS API (meetings metadata + transcripts)
-- **Reads**: ~/Library/Application Support/Granola/supabase.json
-- **Writes**: Nothing
-- **External deps**: curl, jq
+#### Granola (MCP)
+- **Purpose**: Meeting data access via Granola's official MCP server
+- **Server**: `https://mcp.granola.ai/mcp` (configured in `.claude/mcp.json`)
+- **Auth**: OAuth 2.0 browser-based (via `/mcp` → Authenticate)
+- **Tools**: `list_meetings`, `get_meetings`, `get_meeting_transcript`, `query_granola_meetings`
+- **Setup**: `/connect granola`
 
 #### `connector-google.sh`
 - **Purpose**: Wrapper delegating to TypeScript connector implementation
@@ -457,7 +452,7 @@ bash bin/test-isolation.sh
 | `session_tracking` | Consent flag | session-start | onboarding (consent phase) |
 | `transcript_sharing` | Consent flag | transcript-archive | onboarding (consent phase) |
 | `telemetry` | Consent flag | telemetry.sh | onboarding (consent phase) |
-| `granola_folders` | Custom Granola paths | granola.sh | User config |
+| `connected_services` | Connector status (granola, google) | connect.md | User config |
 
 ### `.egregore-session-id` (gitignored — current session)
 
@@ -492,7 +487,7 @@ Commands that trigger the most infrastructure:
 | `/dashboard` | dashboard-data.sh |
 | `/reflect` | graph.sh, graph-batch.sh, telemetry.sh |
 | `/deep-reflect` | graph.sh, graph-batch.sh, telemetry.sh |
-| `/meeting` | granola.sh, graph.sh, graph-batch.sh, telemetry.sh |
+| `/meeting` | Granola MCP, graph.sh, graph-batch.sh, telemetry.sh |
 | `/onboarding` | graph.sh, github-auth.sh, telemetry.sh |
 | `/checkup` | github-auth.sh, graph.sh, notify.sh, ensure-shell-function.sh |
 | `/setup` | graph.sh, sync-repos.sh, github-auth.sh |

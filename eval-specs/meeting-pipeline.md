@@ -47,7 +47,7 @@ Slots are now optional — the agent activates what the material and intent requ
 ## Input Resolution
 | Type | Command |
 |------|---------|
-| meeting | `bash bin/granola.sh get {id}` |
+| meeting | Granola MCP: `get_meeting_transcript` + `list_meetings` for metadata |
 
 ## Topology Configs
 
