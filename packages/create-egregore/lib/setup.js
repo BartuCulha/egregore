@@ -14,18 +14,24 @@ function run(cmd, opts = {}) {
   return execSync(cmd, { stdio: "pipe", encoding: "utf-8", timeout: 60000, ...opts }).trim();
 }
 
-function ghApi(method, path, token) {
+function ghApi(method, apiPath, token, body) {
   return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "create-egregore",
+    };
+    if (payload) {
+      headers["Content-Type"] = "application/json";
+      headers["Content-Length"] = Buffer.byteLength(payload);
+    }
     const req = https.request(
       {
         hostname: "api.github.com",
-        path,
+        path: apiPath,
         method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "create-egregore",
-        },
+        headers,
       },
       (res) => {
         let buf = "";
@@ -40,8 +46,31 @@ function ghApi(method, path, token) {
       }
     );
     req.on("error", reject);
+    if (payload) req.write(payload);
     req.end();
   });
+}
+
+/**
+ * Initialize memory directory structure with .gitkeep files.
+ */
+function initMemoryDirs(memoryDir) {
+  const dirs = [
+    "people",
+    "handoffs",
+    "knowledge/decisions",
+    "knowledge/patterns",
+    "knowledge/findings",
+    "quests",
+    "wraps",
+  ];
+  for (const d of dirs) {
+    const fullPath = path.join(memoryDir, d);
+    if (!fs.existsSync(fullPath)) {
+      fs.mkdirSync(fullPath, { recursive: true });
+      fs.writeFileSync(path.join(fullPath, ".gitkeep"), "");
+    }
+  }
 }
 
 /**
@@ -365,4 +394,14 @@ async function installShellAlias(egregoreDir, ui) {
   }
 }
 
-module.exports = { install };
+module.exports = {
+  install,
+  ghApi,
+  acceptPendingInvitations,
+  registerInstance,
+  installShellAlias,
+  embedToken,
+  configureGitCredentials,
+  initMemoryDirs,
+  run,
+};
