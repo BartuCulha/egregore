@@ -214,7 +214,7 @@ async function localFounderFlow(ui) {
   }
 
   // 5. Collect project info
-  let orgName, description, selectedRepos = [];
+  let orgName, description, selectedRepos = [], newProjectRepo = null;
 
   if (isNewProject) {
     const nameInput = await ui.prompt("What's your team called?");
@@ -222,6 +222,34 @@ async function localFounderFlow(ui) {
 
     const descInput = await ui.prompt("What are you building? (one line)");
     description = descInput || "";
+
+    // Ask about project repo
+    console.log("");
+    const projectAction = await ui.choose("Do you have a project repo?", [
+      { label: "Create a new repo", description: "Start fresh — we'll create it on GitHub" },
+      { label: "Connect an existing repo", description: "I already have code" },
+      { label: "Skip for now", description: "I'll add projects later" },
+    ]);
+
+    if (projectAction.label.startsWith("Create")) {
+      const projectName = await ui.prompt("Repo name:");
+      if (projectName) {
+        newProjectRepo = projectName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      }
+    } else if (projectAction.label.startsWith("Connect")) {
+      const s0 = ui.spinner("Loading repos...");
+      try {
+        const repos = await listOrgRepos(githubToken, githubOrg);
+        s0.stop("Loaded repos");
+        if (repos.length > 0) {
+          selectedRepos = await ui.multiSelect("Which repos should Egregore manage?", repos);
+        } else {
+          ui.info("No repos found in this org yet.");
+        }
+      } catch {
+        s0.stop("Could not load repos");
+      }
+    }
   } else {
     // "Connect existing repos"
     const nameInput = await ui.prompt(`Display name [${githubOrg}]:`);
@@ -298,6 +326,33 @@ async function localFounderFlow(ui) {
     } catch (err) {
       s2.fail(`Memory repo creation failed: ${err.message}`);
       process.exit(1);
+    }
+  }
+
+  // 7b. Create project repo (if requested)
+  if (newProjectRepo) {
+    if (newProjectRepo === repoName || newProjectRepo === memoryRepoName) {
+      ui.warn(`"${newProjectRepo}" conflicts with Egregore repo names — skipping`);
+      newProjectRepo = null;
+    } else {
+      const s3 = ui.spinner(`Creating ${newProjectRepo}...`);
+      const projExists = await repoExists(githubToken, githubOrg, newProjectRepo);
+      if (projExists) {
+        selectedRepos.push(newProjectRepo);
+        s3.stop(`${newProjectRepo} already exists — added to managed repos`);
+      } else {
+        try {
+          await createRepo(githubToken, githubOrg, newProjectRepo, isOrg, description || "");
+          if (await waitForRepo(githubToken, githubOrg, newProjectRepo)) {
+            selectedRepos.push(newProjectRepo);
+            s3.stop(`Created ${newProjectRepo}`);
+          } else {
+            s3.fail(`${newProjectRepo} creation timed out`);
+          }
+        } catch (err) {
+          s3.fail(`Could not create ${newProjectRepo}: ${err.message}`);
+        }
+      }
     }
   }
 
@@ -419,10 +474,13 @@ async function localFounderFlow(ui) {
 
   // 18. Telegram group setup (optional)
   console.log("");
-  ui.info("Egregore can send notifications to a Telegram group.");
-  ui.info("Create a group, add @egregore_bot, and paste the invite link.");
+  ui.info("Want notifications? Set up a Telegram group:");
+  ui.info("");
+  ui.info(`  1. Create a Telegram group for your team`);
+  ui.info(`  2. Add the bot: ${ui.cyan("https://t.me/egregore_bot")}`);
+  ui.info(`  3. Paste the group invite link below`);
   console.log("");
-  const telegramLink = await ui.prompt("Telegram group invite link (Enter to skip):");
+  const telegramLink = await ui.prompt("Group invite link (Enter to skip):");
   if (telegramLink) {
     egreConfig.telegram_group_link = telegramLink;
     // Update local egregore.json
@@ -680,4 +738,4 @@ async function localJoinFlow(orgArg, ui) {
   console.log("");
 }
 
-module.exports = { localFounderFlow, localJoinFlow, addCollaborator, getUser, repoExists };
+module.exports = { localFounderFlow, localJoinFlow, addCollaborator, getUser, repoExists, createRepo, waitForRepo };
