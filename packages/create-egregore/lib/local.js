@@ -346,6 +346,7 @@ async function localFounderFlow(ui) {
 
   // 8. Write egregore.json to remote repo (so joiners can read it)
   const egreConfig = {
+    mode: "local",
     org_name: orgName,
     github_org: githubOrg,
     memory_repo: `https://github.com/${githubOrg}/${memoryRepoName}.git`,

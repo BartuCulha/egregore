@@ -212,6 +212,18 @@ async function install(data, ui, targetDir) {
   }
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
 
+  // 4c. Ensure mode is set in egregore.json (connected mode for API-based setup)
+  const configPath = path.join(egregoreDir, "egregore.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (!config.mode) {
+        config.mode = "connected";
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+      }
+    } catch {}
+  }
+
   // 5. Register instance + shell alias
   ui.step(5, totalSteps, "Registering instance...");
   registerInstance(forkDirName, org_name, egregoreDir);
