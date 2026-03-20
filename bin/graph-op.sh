@@ -337,10 +337,11 @@ case "$OP" in
       WHERE hs.status <> 'complete'
       SET hs.status = 'complete', hs.completedAt = datetime()
       WITH h
-      MERGE (a:Artifact {path: \$path})
-      ON CREATE SET a.type = 'harvest', a.title = h.topic, a.created = datetime()
+      MERGE (a:Artifact {id: \$hid + '-synthesis'})
+      ON CREATE SET a.type = 'harvest', a.title = h.topic, a.filePath = \$path,
+        a.created = datetime(), a.topics = coalesce([h.topic], [])
       MERGE (h)-[:PRODUCED]->(a)
-      RETURN h.id AS id, h.status AS status, a.path AS artifact
+      RETURN h.id AS id, h.status AS status, a.id AS artifact
     " "{\"hid\":\"$HID\",\"path\":\"$ARTIFACT_PATH\"}"
     ;;
 

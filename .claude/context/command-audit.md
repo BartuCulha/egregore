@@ -1,8 +1,12 @@
 # Command Audit: Neo4j Dependency Classification
 
-**Date**: 2026-03-18
-**Author**: cem
-**Context**: CORK Mar 17 — 27 of ~50 commands currently fail without Neo4j
+**Date**: 2026-03-18 (updated 2026-03-20)
+**Author**: cem (updated: oz)
+**Context**: CORK Mar 17 — 27 of ~50 commands currently fail without Neo4j. Updated after mode-aware implementation (PRs #364-#373).
+
+## Mode detection
+
+`egregore.json` now has a `mode` field: `"local"` (OSS) or `"connected"` (hosted). Written during `create-egregore` setup. Commands read this to decide behavior — local mode skips ALL graph/API calls silently. No "Graph offline" warnings, no "/connect" suggestions. See `oss-launch.md` for full spec.
 
 ## Philosophy
 
@@ -40,9 +44,11 @@ and belong in the managed tier.
 | Category | Count | Description |
 |----------|-------|-------------|
 | **1 — Works as-is** | 20 | Zero graph calls. Ships unchanged. |
-| **2 — Needs modification** | 24 | Graph is supplementary. Add FS fallback. |
-| **3 — Graph-required** | 11 | Core purpose is the graph. Managed-only. |
+| **2 — Works in local mode** | 28 | Graph is supplementary. FS fallback implemented or trivial. |
+| **3 — Graph-required** | 7 | Core purpose is the graph. Connected-only. |
 | **Total** | **55** | |
+
+**Updated 2026-03-20**: `/ask`, `/dashboard`, `/deep-reflect`, `/me` moved from Cat 3 → Cat 2 (local mode implemented). `/activity`, `/handoff`, `/invite`, `/quest`, `/reflect`, `/onboarding` all have mode detection shipped.
 
 ---
 
@@ -92,7 +98,7 @@ listed per command.
   - `memory/wraps/YYYY-MM/*.md` → recent sessions (author, topic, date)
   - `git log --oneline -20` → commit activity as proxy for session data
   - Skip `record-focus`, `mark-read`, `mark-done` (no-op without graph)
-- **Render**: Same TUI layout but populated from files. Sections with no data show "Connect the knowledge graph for richer activity data — run /connect."
+- **Render**: Same TUI layout but populated from files. In local mode, footer shows "Local mode — showing activity from memory". **DONE** (PR #372).
 - **Effort**: High — this is the biggest single modification.
 
 #### handoff
@@ -122,7 +128,7 @@ listed per command.
   - **New**: Write quest file + push memory. Skip graph Quest node creation.
   - **Prioritize/Pause/Complete**: Update frontmatter in quest file. Skip graph SET.
   - **Contribute**: Append to quest file. Skip graph.
-- **User sees**: Full quest management from files. No todo integration. "Connect the knowledge graph for linked todos and richer quest analytics — /connect."
+- **User sees**: Full quest management from files. No todo integration. **DONE** (PR #372 — mode detection added).
 - **Effort**: High — needs FS scanner for list/show, but patterns reusable from activity.
 
 ### Core Commands
@@ -283,19 +289,19 @@ a managed feature, (3) suggests an alternative or next step.
 
 ### Command Table
 
-| # | Command | Purpose | OSS Message | Alternative |
-|---|---------|---------|-------------|-------------|
-| 1 | `ask` | Async question routing via graph nodes | "/ask routes questions through the knowledge graph. Run /connect to enable, or mention someone in a /handoff." | /handoff |
-| 2 | `dashboard` | Personal status: sessions, todos, threads | "/dashboard is a Managed feature. Use /activity for a file-based overview." | /activity |
-| 3 | `deep-reflect` | Cross-reference analysis against knowledge landscape | "/deep-reflect cross-references insights across your knowledge graph. Run /connect to enable, or use /reflect for local capture." | /reflect |
-| 4 | `todo` | Personal task management (graph-only storage) | "/todo manages tasks in the knowledge graph. Run /connect to enable, or track tasks in your own notes." | /note |
-| 5 | `me` | View/set display name with graph profile | "/me manages your graph profile. Run /connect to enable. Your display name is in .egregore-state.json." | Edit state file |
-| 6 | `quest-suggest` | Quest drift analysis: orphan ratio, stale priorities | "/quest-suggest analyzes quest drift across the knowledge graph. Run /connect to enable, or review quests with /quest." | /quest |
-| 7 | `project` | Project status: linked quests, artifacts, domain | "/project shows project status from the knowledge graph. Run /connect to enable." | /quest, git status |
-| 8 | `character-v4` | Egregore personality seeded from graph metrics | "/character requires the knowledge graph for context. Run /connect to enable." | — |
-| 9 | `delete-user` | Remove member from graph + GitHub + Supabase | "/delete-user removes members across all systems. Run /connect to enable, or remove GitHub access manually via org settings." | GitHub org settings |
-| 10 | `graph-diagnostic` | 26 diagnostic queries against Neo4j | "/graph-diagnostic inspects knowledge graph health. Run /connect to enable." | — |
-| 11 | `graph-maintain` | Graph maintenance: scan, auto-fix, suggest | "/graph-maintain runs knowledge graph maintenance. Run /connect to enable." | — |
+Commands that truly require the knowledge graph. In local mode, show an informative message — never an error.
+
+| # | Command | Purpose | Connected-only feature |
+|---|---------|---------|----------------------|
+| 1 | `todo` | Personal task management (graph-only storage) | Yes — no FS equivalent |
+| 2 | `quest-suggest` | Quest drift analysis: orphan ratio, stale priorities | Yes — requires graph metrics |
+| 3 | `project` | Project status: linked quests, artifacts, domain | Yes — requires graph |
+| 4 | `character-v4` | Egregore personality seeded from graph metrics | Yes — requires graph |
+| 5 | `delete-user` | Remove member from graph + GitHub + Supabase | Partially — GitHub removal works, graph/Supabase need API |
+| 6 | `graph-diagnostic` | 26 diagnostic queries against Neo4j | Yes — no data without graph |
+| 7 | `graph-maintain` | Graph maintenance: scan, auto-fix, suggest | Yes — no data without graph |
+
+**Moved to Category 2 (2026-03-20):** `ask`, `dashboard`, `deep-reflect`, `me` — all now have local mode fallbacks implemented.
 
 ---
 
