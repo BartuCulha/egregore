@@ -463,34 +463,7 @@ async function localFounderFlow(ui) {
   registerInstance(repoName, orgName, egregoreDir);
   const alias = await installShellAlias(egregoreDir, ui);
 
-  // 18. Telegram group setup (optional)
-  console.log("");
-  ui.info("Want notifications? Set up a Telegram group:");
-  ui.info("");
-  ui.info(`  1. Create a Telegram group for your team`);
-  ui.info(`  2. Add the bot: ${ui.cyan("https://t.me/egregore_bot")}`);
-  ui.info(`  3. Paste the group invite link below`);
-  console.log("");
-  const telegramLink = await ui.prompt("Group invite link (Enter to skip):");
-  if (telegramLink) {
-    egreConfig.telegram_group_link = telegramLink;
-    // Update local egregore.json
-    fs.writeFileSync(path.join(egregoreDir, "egregore.json"), JSON.stringify(egreConfig, null, 2) + "\n");
-    // Push to remote so joiners see it
-    try {
-      await putFileContent(
-        githubToken,
-        githubOrg,
-        repoName,
-        "egregore.json",
-        JSON.stringify(egreConfig, null, 2) + "\n",
-        "Add Telegram group link",
-      );
-    } catch {}
-    ui.success("Telegram group link saved");
-  }
-
-  // 19. Optional invite
+  // 18. Optional invite
   console.log("");
   const invUsername = await ui.prompt("Invite a teammate? Enter their GitHub username (or press Enter to skip):");
   if (invUsername) {
@@ -688,14 +661,7 @@ async function localJoinFlow(orgArg, ui) {
     }
   }
 
-  // 12. Show Telegram group link if available
-  if (config.telegram_group_link) {
-    console.log("");
-    ui.info("Join the team's Telegram group for notifications:");
-    ui.info(`  ${ui.cyan(config.telegram_group_link)}`);
-  }
-
-  // 13. Check for welcome note
+  // 12. Check for welcome note
   const welcomeFile = path.join(memoryDir, "people", `${user.login}.md`);
   if (fs.existsSync(welcomeFile)) {
     try {
