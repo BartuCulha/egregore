@@ -104,8 +104,9 @@ async function putFileContent(token, owner, repo, filePath, content, message) {
   return ghApi("PUT", `/repos/${owner}/${repo}/contents/${filePath}`, token, body);
 }
 
-async function listOrgRepos(token, org) {
-  const { status, data } = await ghApi("GET", `/orgs/${org}/repos?per_page=100&sort=updated`, token);
+async function listOrgRepos(token, owner, isOrg) {
+  const apiPath = isOrg ? `/orgs/${owner}/repos?per_page=100&sort=updated` : `/users/${owner}/repos?per_page=100&sort=updated&type=owner`;
+  const { status, data } = await ghApi("GET", apiPath, token);
   if (status !== 200 || !Array.isArray(data)) return [];
   return data
     .filter((r) => !r.archived && r.name !== "egregore" && r.name !== "egregore-core" && !r.name.endsWith("-memory"))
@@ -180,14 +181,7 @@ async function localFounderFlow(ui) {
   // 2. Get user info
   const user = await getUser(githubToken);
 
-  // 3. "What do you want to do?"
-  const action = await ui.choose("What do you want to do?", [
-    { label: "Start a new project", description: "Create repos and shared memory" },
-    { label: "Connect existing repos", description: "Set up Egregore for an org you manage" },
-  ]);
-  const isNewProject = action.label.startsWith("Start");
-
-  // 4. Detect GitHub org
+  // 3. Where — always show picker (personal first)
   console.log("");
   const s = ui.spinner("Checking your GitHub accounts...");
   const orgs = await listOrgs(githubToken);
@@ -195,29 +189,31 @@ async function localFounderFlow(ui) {
 
   let githubOrg, isOrg;
   if (orgs.length === 0) {
-    // No orgs — use personal account
     githubOrg = user.login;
     isOrg = false;
     ui.info(`Using personal account: ${ui.bold(githubOrg)}`);
-  } else if (orgs.length === 1) {
-    // One org — use it automatically
-    githubOrg = orgs[0].login;
-    isOrg = true;
-    ui.info(`Using organization: ${ui.bold(githubOrg)}`);
   } else {
-    // Multiple orgs — picker
-    const orgChoices = orgs.map((o) => ({ label: o.login, description: "Organization" }));
-    orgChoices.push({ label: user.login, description: "Personal account" });
-    const orgChoice = await ui.choose("Which GitHub account?", orgChoices);
+    const orgChoices = [{ label: user.login, description: "Personal account" }];
+    for (const o of orgs) {
+      orgChoices.push({ label: o.login, description: "Organization" });
+    }
+    const orgChoice = await ui.choose("Where do you want to set up Egregore?", orgChoices);
     githubOrg = orgChoice.label;
     isOrg = githubOrg !== user.login;
   }
+
+  // 4. What — new or existing?
+  const action = await ui.choose("What are you working on?", [
+    { label: "Starting something new", description: "Create a project from scratch" },
+    { label: "Existing project", description: "Connect repos I already have" },
+  ]);
+  const isNewProject = action.label.startsWith("Starting");
 
   // 5. Collect project info
   let orgName, description, selectedRepos = [], newProjectRepo = null;
 
   if (isNewProject) {
-    const nameInput = await ui.prompt("What's your team called?");
+    const nameInput = await ui.prompt("What's your team or project called?");
     orgName = nameInput || githubOrg;
 
     const descInput = await ui.prompt("What are you building? (one line)");
@@ -225,44 +221,32 @@ async function localFounderFlow(ui) {
 
     // Ask about project repo
     console.log("");
-    const projectAction = await ui.choose("Do you have a project repo?", [
-      { label: "Create a new repo", description: "Start fresh — we'll create it on GitHub" },
-      { label: "Connect an existing repo", description: "I already have code" },
-      { label: "Skip for now", description: "I'll add projects later" },
-    ]);
-
-    if (projectAction.label.startsWith("Create")) {
-      const projectName = await ui.prompt("Repo name:");
-      if (projectName) {
-        newProjectRepo = projectName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-      }
-    } else if (projectAction.label.startsWith("Connect")) {
-      const s0 = ui.spinner("Loading repos...");
-      try {
-        const repos = await listOrgRepos(githubToken, githubOrg);
-        s0.stop("Loaded repos");
-        if (repos.length > 0) {
-          selectedRepos = await ui.multiSelect("Which repos should Egregore manage?", repos);
-        } else {
-          ui.info("No repos found in this org yet.");
-        }
-      } catch {
-        s0.stop("Could not load repos");
-      }
+    ui.info("Egregore creates its own repo for shared memory and config.");
+    ui.info("Want to also create a repo for your actual project code?");
+    console.log("");
+    const projectName = await ui.prompt("Project repo name (Enter to skip):");
+    if (projectName) {
+      newProjectRepo = projectName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     }
   } else {
-    // "Connect existing repos"
-    const nameInput = await ui.prompt(`Display name [${githubOrg}]:`);
+    // "Existing project"
+    const nameInput = await ui.prompt(`What should we call this Egregore? [${githubOrg}]:`);
     orgName = nameInput || githubOrg;
     description = "";
 
     // Multi-select repos to manage
+    const s0 = ui.spinner("Loading repos...");
     try {
-      const repos = await listOrgRepos(githubToken, githubOrg);
+      const repos = await listOrgRepos(githubToken, githubOrg, isOrg);
+      s0.stop("Loaded repos");
       if (repos.length > 0) {
         selectedRepos = await ui.multiSelect("Which repos should Egregore manage?", repos);
+      } else {
+        ui.info("No repos found yet.");
       }
-    } catch {}
+    } catch {
+      s0.stop("Could not load repos");
+    }
   }
 
   // 6. Derive repo names from team name
