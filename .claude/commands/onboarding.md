@@ -30,6 +30,22 @@ Six moments. Everything else is invisible plumbing.
 VERIFY → WELCOME → HARVEST_IDENTITY → HARVEST_CONNECTION → CONSENT → ORIENT → COMPLETE
 ```
 
+## Local mode gate (applies to ALL states below)
+
+During VERIFY, you will check `api_url` from `egregore.json`. Store the result for the entire flow.
+
+**If `api_url` is empty — this is local mode. For the ENTIRE onboarding flow:**
+- **DO NOT call `bin/graph.sh` under any circumstances.**
+- **DO NOT call `curl` or any HTTP endpoint.**
+- **DO NOT run any code block that contacts an API, Neo4j, or Supabase.**
+- The ONLY external calls allowed are `git` operations (push memory).
+
+**If `api_url` is set — connected mode.** All API calls proceed normally.
+
+This is non-negotiable. Graph calls in local mode confuse the user and serve no purpose — `graph.sh` returns empty results anyway.
+
+---
+
 ## Resumption
 
 Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY — jump directly to the saved phase and use any data already in state.
@@ -342,9 +358,9 @@ Flat keys are required for backward compatibility — `bin/telemetry.sh` and `bi
 
 **Actions:**
 
-1. **Check `api_url` from `egregore.json`.** If empty (local mode), skip graph queries entirely — go straight to displaying "It's early — you're one of the first here." and the AskUserQuestion below.
+1. **If local mode (`api_url` empty): DO NOT run the graph query below.** Go straight to displaying "It's early — you're one of the first here." and the AskUserQuestion in step 3.
 
-   **If `api_url` is set (connected mode):** Query graph for active quests AND recent handoffs in a single bash call — do NOT make two separate graph queries:
+   **If connected mode (`api_url` set):** Query graph for active quests AND recent handoffs in a single bash call — do NOT make two separate graph queries:
 ```bash
 QUESTS=$(bash bin/graph.sh query "MATCH (q:Quest {status: 'active'}) OPTIONAL MATCH (a:Artifact)-[:PART_OF]->(q) RETURN q.id AS quest, q.title AS title, count(a) AS artifacts ORDER BY count(a) DESC LIMIT 3" 2>/dev/null) && \
 HANDOFFS=$(bash bin/graph.sh query "MATCH (s:Session) WHERE s.date IS NOT NULL MATCH (s)-[:BY]->(author:Person) RETURN s.topic AS topic, author.name AS author ORDER BY s.date DESC LIMIT 3" 2>/dev/null) && \
@@ -372,6 +388,7 @@ questions:
 
 4. IF "Jump in":
    Show 1-2 specific suggestions based on harvest answers:
+   - IF local mode: "Run `/dashboard` to see your workspace, or just tell me what you're working on."
    - IF focus = `building` AND quests exist: "Check out the {quest_title} quest — `/quest {slug}`"
    - IF focus = `exploring`: "Try `/activity` to see what's happening, or `/reflect` to capture your first thought."
    - IF focus = `evaluating`: "Run `/dashboard` to see the system from your perspective."
@@ -391,9 +408,9 @@ questions:
 
 **Entry:** ORIENT completed
 
-**Actions (steps 1-2 always execute; steps 3-4 are skipped in local mode):**
+**Actions (steps 1-2 always execute; steps 3-4 are connected mode only):**
 
-**Local mode detection:** Check `api_url` from `egregore.json`. If empty, skip steps 3 (Neo4j) and 4 (Supabase) — the person file in memory is sufficient.
+**Local mode: DO NOT run steps 3 or 4. DO NOT call `bin/graph.sh` or `curl`.** The person file in memory (step 2) is sufficient. Only run steps 1, 2, 5, 6, 7.
 
 **Batching:** In connected mode, run steps 1-4 in parallel (egregore.md update + memory commit + graph MERGE + Supabase sync). In local mode, run steps 1-2 in parallel (egregore.md update + memory commit). Then run steps 5-7 in one parallel call (state update + shell alias + telemetry). The user should see ONE message at the end: "You're in." — not a play-by-play of each step. Suppress ALL output with `2>/dev/null` or variable capture.
 

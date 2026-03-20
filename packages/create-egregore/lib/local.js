@@ -365,6 +365,8 @@ async function localFounderFlow(ui) {
     org_name: orgName,
     github_org: githubOrg,
     memory_repo: `https://github.com/${githubOrg}/${memoryRepoName}.git`,
+    slug: slug,
+    repo_name: repoName,
     repos: selectedRepos,
   };
   try {
