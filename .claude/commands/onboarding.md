@@ -388,7 +388,7 @@ questions:
 
 4. IF "Jump in":
    Show 1-2 specific suggestions based on harvest answers:
-   - IF local mode: "Run `/dashboard` to see your workspace, or just tell me what you're working on."
+   - IF local mode: "Just tell me what you're working on and I'll set up a branch."
    - IF focus = `building` AND quests exist: "Check out the {quest_title} quest — `/quest {slug}`"
    - IF focus = `exploring`: "Try `/activity` to see what's happening, or `/reflect` to capture your first thought."
    - IF focus = `evaluating`: "Run `/dashboard` to see the system from your perspective."
@@ -523,4 +523,5 @@ bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\",\"rounds\"
 
 ### 8. Done
 
-Display: **"You're in. Type `/activity` to see what's happening, or just start working."**
+- **Local mode**: Display: **"You're in. Just tell me what you're working on."**
+- **Connected mode**: Display: **"You're in. Type `/activity` to see what's happening, or just start working."**
