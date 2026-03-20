@@ -525,7 +525,7 @@ async function localFounderFlow(ui) {
       invSpin.stop(`Invited ${invUsername}`);
       console.log("");
       ui.info(`Tell them to run:`);
-      ui.info(`  ${ui.bold(`npx create-egregore@latest join ${githubOrg}/${repoName}`)}`);
+      ui.commandBox("command", `npx create-egregore@latest join ${githubOrg}/${repoName}`);
     } catch (err) {
       invSpin.fail(`Could not invite ${invUsername}: ${err.message}`);
     }
