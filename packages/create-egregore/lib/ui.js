@@ -93,12 +93,13 @@ function prompt(question) {
 }
 
 // Prompt with numbered choices
-async function choose(question, options) {
+async function choose(question, options, hint) {
   console.log(`\n  ${question}\n`);
   for (let i = 0; i < options.length; i++) {
     const { label, description } = options[i];
     console.log(`  ${BOLD}${i + 1}.${RESET} ${label}${description ? ` ${DIM}— ${description}${RESET}` : ""}`);
   }
+  if (hint) console.log(`\n  ${DIM}${hint}${RESET}`);
   console.log();
 
   while (true) {
