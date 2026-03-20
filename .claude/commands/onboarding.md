@@ -112,7 +112,7 @@ Welcome to {org_name}.
 Let's get you set up — a few quick questions.
 ```
 
-4. Save to state: `onboarding.phase = "welcome"`, `onboarding.type = "joiner"`, `onboarding.started_at = {ISO timestamp}`
+4. Save to state: `onboarding.phase = "welcome"`, `onboarding.started_at = {ISO timestamp}`. **Do NOT set `onboarding.type` or `usage_type`** — the installer already set `usage_type` correctly (`founder_group` or `joiner_group`). Preserve whatever is already in state.
 
 **Exit:** → HARVEST_IDENTITY (always, unconditional)
 
@@ -499,10 +499,11 @@ Fill all values from state. `member_role` maps to the harvest role answer, `focu
     "phase": "complete",
     "completed_at": "{ISO timestamp}"
   },
-  "display_name": "...",
-  "usage_type": "joiner_group"
+  "display_name": "..."
 }
 ```
+
+**Do NOT set `usage_type` here.** It was already set by the installer. Preserve the existing value.
 
 ### 6. Shell alias
 
@@ -514,8 +515,10 @@ Tell the user: "From now on, just type **`{ALIAS_NAME}`** in any terminal to lau
 
 ### 7. Emit telemetry
 
+Read `usage_type` from `.egregore-state.json` and use it:
 ```bash
-bash bin/telemetry.sh emit "onboarding_complete" '{"type":"joiner","rounds":2}' 2>/dev/null &
+TYPE=$(jq -r '.usage_type // "joiner_group"' .egregore-state.json 2>/dev/null)
+bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\",\"rounds\":2}" 2>/dev/null &
 ```
 
 ### 8. Done
