@@ -357,7 +357,7 @@ async function installShellAlias(egregoreDir, ui) {
       if (fs.existsSync(configPath)) {
         try { slug = JSON.parse(fs.readFileSync(configPath, "utf-8")).slug || ""; } catch {}
       }
-      defaultName = slug ? `egregore-${slug}` : "egregore-2";
+      defaultName = slug || "egregore-2";
     }
 
     // Ask user (skip prompt in non-interactive mode)

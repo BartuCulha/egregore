@@ -491,46 +491,43 @@ async function localFounderFlow(ui) {
 
   // 19. Optional invite
   console.log("");
-  const inviteAnswer = await ui.prompt("Know someone who'd find this useful? [y/N]:");
-  if (inviteAnswer && inviteAnswer.toLowerCase() === "y") {
-    const invUsername = await ui.prompt("GitHub username:");
-    if (invUsername) {
-      const invSpin = ui.spinner(`Inviting ${invUsername}...`);
-      try {
-        // Add as collaborator to all repos
-        await addCollaborator(githubToken, githubOrg, repoName, invUsername);
-        await addCollaborator(githubToken, githubOrg, memoryRepoName, invUsername);
-        for (const mr of selectedRepos) {
-          await addCollaborator(githubToken, githubOrg, mr, invUsername).catch(() => {});
-        }
-
-        // Create person file
-        const invPersonContent = [
-          "---",
-          `name: ${invUsername}`,
-          `github: ${invUsername}`,
-          `invited_by: ${user.login}`,
-          `joined: ${today}`,
-          "---",
-          "",
-        ].join("\n");
-        const invPersonFile = path.join(memoryDir, "people", `${invUsername}.md`);
-        if (!fs.existsSync(invPersonFile)) {
-          fs.writeFileSync(invPersonFile, invPersonContent);
-          try {
-            run("git add -A", { cwd: memoryDir });
-            run(`git commit -m "Invite ${invUsername}"`, { cwd: memoryDir });
-            run("git push", { cwd: memoryDir });
-          } catch {}
-        }
-
-        invSpin.stop(`Invited ${invUsername}`);
-        console.log("");
-        ui.info(`Tell them to run:`);
-        ui.info(`  ${ui.bold(`npx create-egregore join ${githubOrg}/${repoName}`)}`);
-      } catch (err) {
-        invSpin.fail(`Could not invite ${invUsername}: ${err.message}`);
+  const invUsername = await ui.prompt("Invite a teammate? Enter their GitHub username (or press Enter to skip):");
+  if (invUsername) {
+    const invSpin = ui.spinner(`Inviting ${invUsername}...`);
+    try {
+      // Add as collaborator to all repos
+      await addCollaborator(githubToken, githubOrg, repoName, invUsername);
+      await addCollaborator(githubToken, githubOrg, memoryRepoName, invUsername);
+      for (const mr of selectedRepos) {
+        await addCollaborator(githubToken, githubOrg, mr, invUsername).catch(() => {});
       }
+
+      // Create person file
+      const invPersonContent = [
+        "---",
+        `name: ${invUsername}`,
+        `github: ${invUsername}`,
+        `invited_by: ${user.login}`,
+        `joined: ${today}`,
+        "---",
+        "",
+      ].join("\n");
+      const invPersonFile = path.join(memoryDir, "people", `${invUsername}.md`);
+      if (!fs.existsSync(invPersonFile)) {
+        fs.writeFileSync(invPersonFile, invPersonContent);
+        try {
+          run("git add -A", { cwd: memoryDir });
+          run(`git commit -m "Invite ${invUsername}"`, { cwd: memoryDir });
+          run("git push", { cwd: memoryDir });
+        } catch {}
+      }
+
+      invSpin.stop(`Invited ${invUsername}`);
+      console.log("");
+      ui.info(`Tell them to run:`);
+      ui.info(`  ${ui.bold(`npx create-egregore@latest join ${githubOrg}/${repoName}`)}`);
+    } catch (err) {
+      invSpin.fail(`Could not invite ${invUsername}: ${err.message}`);
     }
   }
 

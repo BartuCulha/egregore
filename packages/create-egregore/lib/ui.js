@@ -69,11 +69,11 @@ function spinner(msg) {
   return {
     stop(result) {
       clearInterval(interval);
-      process.stdout.write(`\r  ${GREEN}✓${RESET} ${result || msg}\n`);
+      process.stdout.write(`\r\x1b[2K  ${GREEN}✓${RESET} ${result || msg}\n`);
     },
     fail(result) {
       clearInterval(interval);
-      process.stdout.write(`\r  ${RED}✗${RESET} ${result || msg}\n`);
+      process.stdout.write(`\r\x1b[2K  ${RED}✗${RESET} ${result || msg}\n`);
     },
   };
 }
