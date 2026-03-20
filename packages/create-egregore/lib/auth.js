@@ -91,12 +91,15 @@ async function deviceFlow(ui) {
   // 2. Show code + open browser
   const copied = copyToClipboard(user_code);
   ui.info("");
+  ui.info("A GitHub page will open. Just click Authorize — you'll choose");
+  ui.info("where to set up Egregore in the next step.");
+  ui.info("");
   if (copied) {
     ui.info(`Code copied to clipboard: ${ui.bold(user_code)}`);
   } else {
     ui.info(`Your code: ${ui.bold(user_code)}`);
   }
-  ui.info("Opening browser — paste the code and authorize.");
+  ui.info("Opening browser...");
   ui.info("");
   openBrowser(verifyUrl);
 
