@@ -197,7 +197,7 @@ async function localFounderFlow(ui) {
     for (const o of orgs) {
       orgChoices.push({ label: o.login, description: "Organization" });
     }
-    const orgChoice = await ui.choose("Where do you want to set up Egregore?", orgChoices);
+    const orgChoice = await ui.choose("Where do you want to set up Egregore?", orgChoices, "Don't see your org? Grant access on the GitHub authorization page and re-run.");
     githubOrg = orgChoice.label;
     isOrg = githubOrg !== user.login;
   }
