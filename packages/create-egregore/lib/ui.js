@@ -138,7 +138,21 @@ async function multiSelect(question, options) {
   return selected;
 }
 
+function commandBox(label, cmd) {
+  const inner = `   ${cmd}   `;
+  const width = Math.max(inner.length, label.length + 5);
+  const pad = (s) => s + " ".repeat(Math.max(0, width - s.length));
+  const top = `┌─ ${label} ${"─".repeat(Math.max(0, width - label.length - 4))}┐`;
+  const blank = `│${" ".repeat(width)}│`;
+  const bot = `└${"─".repeat(width)}┘`;
+  console.log(`\n  ${DIM}${top}${RESET}`);
+  console.log(`  ${DIM}${blank}${RESET}`);
+  console.log(`  ${DIM}│${RESET}${BOLD}${pad(inner)}${RESET}${DIM}│${RESET}`);
+  console.log(`  ${DIM}${blank}${RESET}`);
+  console.log(`  ${DIM}${bot}${RESET}\n`);
+}
+
 module.exports = {
   banner, info, success, warn, error, step, dim, bold, cyan,
-  spinner, prompt, choose, multiSelect,
+  spinner, prompt, choose, multiSelect, commandBox,
 };
