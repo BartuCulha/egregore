@@ -12,6 +12,7 @@
 .egregore-state.json
 .egregore-session-id
 egregore.json
+CLAUDE.md.backup
 .mcp.json
 mcp.json
 mcp.shared.*.json
