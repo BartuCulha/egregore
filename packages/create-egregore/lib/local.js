@@ -317,7 +317,7 @@ async function localFounderFlow(ui) {
   if (newProjectRepo) {
     // Re-prompt if name conflicts with core/memory repo
     while (newProjectRepo === repoName || newProjectRepo === memoryRepoName) {
-      ui.warn(`"${newProjectRepo}" is already used by your Egregore instance. Pick a different name.`);
+      ui.warn(`Your Egregore is already named "${newProjectRepo}". Pick a different name for your project repo (e.g. "${newProjectRepo}-app").`);
       const retry = await ui.prompt("Repo name (or Enter to skip):");
       if (!retry) { newProjectRepo = null; break; }
       newProjectRepo = retry.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
