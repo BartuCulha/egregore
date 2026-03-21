@@ -755,7 +755,7 @@ fi
   _API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
     TODO_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
-      "MATCH (t:Todo)-[:BY]->(p:Person {name: \$me}) WHERE t.status IN ['open', 'blocked'] OPTIONAL MATCH (t)-[:PART_OF]->(q:Quest) RETURN t.text AS text, t.priority AS priority, t.status AS status, t.created AS created, q.id AS quest ORDER BY t.priority DESC, t.created DESC LIMIT 5" \
+      "MATCH (t:Todo)-[:BY]->(p:Person {github: \$me}) WHERE t.status IN ['open', 'blocked'] OPTIONAL MATCH (t)-[:PART_OF]->(q:Quest) RETURN t.text AS text, t.priority AS priority, t.status AS status, t.created AS created, q.id AS quest ORDER BY t.priority DESC, t.created DESC LIMIT 5" \
       "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
     if [ -n "$TODO_RAW" ]; then
       echo "$TODO_RAW" | jq '[.values[] | {text: .[0], priority: (.[1] // 0), status: .[2], created: .[3], quest: (.[4] // "")}]' 2>/dev/null || echo "[]"
@@ -776,7 +776,7 @@ fi
   # --- Graph: last-seen per person (excluding self) ---
   GRAPH_DATA="[]"
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
-    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.name <> \$me RETURN p.name AS name, max(s.date) AS lastSeen ORDER BY lastSeen DESC"
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, max(s.date) AS lastSeen ORDER BY lastSeen DESC"
     GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
     if [ -n "$GRAPH_RAW" ]; then
       GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
@@ -865,8 +865,10 @@ fi
       BRANCHES_JSON=$(echo "$BRANCHES_JSON" | jq --arg e "+${EXTRA} more" '[.[0:2][], $e]' 2>/dev/null || echo "$BRANCHES_JSON")
     fi
 
+    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" \
+      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches}')
     $FIRST || PRESENCE="$PRESENCE,"
-    PRESENCE="$PRESENCE{\"name\":\"$PNAME\",\"last_seen\":\"$LAST_SEEN_REL\",\"last_seen_sort\":$LAST_SEEN_EPOCH,\"branches\":$BRANCHES_JSON}"
+    PRESENCE="$PRESENCE$ENTRY"
     FIRST=false
   done
   PRESENCE="$PRESENCE]"
@@ -1118,7 +1120,9 @@ if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
     if [ -n "$T_CREATED" ]; then
       T_CLEAN=$(echo "$T_CREATED" | sed 's/Z$//; s/+00:00$//')
       T_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$T_CLEAN" "+%s" 2>/dev/null || \
-                date -j -f "%Y-%m-%d" "${T_CLEAN%%T*}" "+%s" 2>/dev/null || echo "0")
+                date -j -f "%Y-%m-%d" "${T_CLEAN%%T*}" "+%s" 2>/dev/null || \
+                date -d "$T_CLEAN" "+%s" 2>/dev/null || \
+                date -d "${T_CLEAN%%T*}" "+%s" 2>/dev/null || echo "0")
       if [ "$T_EPOCH" -gt 0 ] 2>/dev/null; then
         T_DELTA=$(( NOW_RENDER - T_EPOCH ))
         if [ "$T_DELTA" -lt 86400 ]; then T_AGO="today"
