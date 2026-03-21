@@ -677,6 +677,13 @@ async function localJoinFlow(orgArg, ui) {
     } catch {}
   }
 
+  // 13. Show Telegram group link if configured
+  if (config.telegram_group_link) {
+    console.log("");
+    ui.info("Join the team's Telegram group:");
+    ui.info(`  ${ui.cyan(config.telegram_group_link)}`);
+  }
+
   // 14. Done
   console.log("");
   ui.success(`Joined ${ui.bold(orgName)}`);

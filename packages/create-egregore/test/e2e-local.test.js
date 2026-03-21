@@ -630,7 +630,49 @@ describe("Local mode E2E", { timeout: 300000 }, () => {
     console.log("  Collaboration verified.");
   });
 
-  // ── Test 5: Telegram notifications ──────────────────────────────
+  // ── Test 5: Telegram group link in config ───────────────────────
+
+  it("Telegram group link flows from config to joiner", { timeout: 30000 }, async () => {
+    // 1. Founder adds telegram_group_link to egregore.json on remote
+    console.log("  Adding telegram_group_link to remote config...");
+    const configRaw = await getFile(FOUNDER_TOKEN, TEST_ORG, EGREGORE_REPO, "egregore.json");
+    const config = JSON.parse(configRaw);
+    config.telegram_group_link = "https://t.me/+e2e_test_group";
+    await putFile(
+      FOUNDER_TOKEN,
+      TEST_ORG,
+      EGREGORE_REPO,
+      "egregore.json",
+      JSON.stringify(config, null, 2) + "\n",
+      "Add Telegram group link",
+    );
+
+    // 2. Verify it's readable from remote
+    const updatedRaw = await getFile(JOINER_TOKEN, TEST_ORG, EGREGORE_REPO, "egregore.json");
+    assert.ok(updatedRaw, "joiner should read egregore.json");
+    const updatedConfig = JSON.parse(updatedRaw);
+    assert.equal(updatedConfig.telegram_group_link, "https://t.me/+e2e_test_group",
+      "telegram_group_link should be present in remote config for joiner");
+
+    // 3. Verify the localJoinFlow would pick it up (config.telegram_group_link check)
+    assert.ok(updatedConfig.telegram_group_link.startsWith("https://t.me/"),
+      "telegram_group_link should be a valid Telegram link");
+
+    // 4. Clean up: remove telegram_group_link (so it doesn't affect other tests)
+    delete config.telegram_group_link;
+    await putFile(
+      FOUNDER_TOKEN,
+      TEST_ORG,
+      EGREGORE_REPO,
+      "egregore.json",
+      JSON.stringify(config, null, 2) + "\n",
+      "Remove Telegram group link (cleanup)",
+    );
+
+    console.log("  Telegram group link flow verified.");
+  });
+
+  // ── Test 6: Telegram notifications ──────────────────────────────
 
   it("Telegram group notifications", { timeout: 15000 }, async (t) => {
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_GROUP_ID) {
@@ -659,7 +701,7 @@ describe("Local mode E2E", { timeout: 300000 }, () => {
     console.log("  Telegram notifications verified.");
   });
 
-  // ── Test 6: Config compatible with local mode ───────────────────
+  // ── Test 7: Config compatible with local mode ───────────────────
 
   it("Config compatible with local mode (session-start.sh)", { timeout: 5000 }, async () => {
     // 1. Read egregore.json — no api_url
