@@ -235,7 +235,7 @@ describe("Local mode E2E", { timeout: 300000 }, () => {
 
   // ── Test 1: Founder creates Egregore ────────────────────────────
 
-  it("Founder creates Egregore (--local flow)", { timeout: 60000 }, async () => {
+  it("Founder creates Egregore (--open flow)", { timeout: 60000 }, async () => {
     // 1. Get founder identity
     console.log("  Getting founder identity...");
     const founder = await getUser(FOUNDER_TOKEN);
