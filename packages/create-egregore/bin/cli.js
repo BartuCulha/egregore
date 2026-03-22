@@ -6,7 +6,7 @@
  * Four modes:
  *   npx create-egregore --token st_xxxx   (from website — connected mode)
  *   npx create-egregore                    (interactive — API-based, existing)
- *   npx create-egregore --local            (local mode — founder, no API)
+ *   npx create-egregore --open            (local mode — founder, no API)
  *   npx create-egregore join <org>         (local mode — join existing)
  */
 
@@ -27,8 +27,8 @@ function parseArgs(argv) {
       args.token = argv[i].split("=")[1];
     } else if (argv[i] === "--api" && argv[i + 1]) {
       args.api = argv[++i];
-    } else if (argv[i] === "--local") {
-      args.local = true;
+    } else if (argv[i] === "--open") {
+      args.open = true;
     } else if (argv[i] === "--help" || argv[i] === "-h") {
       args.help = true;
     } else if (!argv[i].startsWith("-")) {
@@ -46,12 +46,12 @@ function showHelp() {
   ui.banner();
   ui.info("Usage:");
   ui.info("  npx create-egregore                          Interactive setup (API)");
-  ui.info("  npx create-egregore --local                  New project (local mode)");
+  ui.info("  npx create-egregore --open                  New project (local mode)");
   ui.info("  npx create-egregore join <org>[/<repo>]       Join existing project");
   ui.info("  npx create-egregore --token <setup-token>    Install from website");
   ui.info("");
   ui.info("Options:");
-  ui.info("  --local           Local mode — no API server needed");
+  ui.info("  --open           Local mode — no API server needed");
   ui.info("  --token <token>   Setup token from egregore.xyz");
   ui.info("  --api <url>       API URL override");
   ui.info("  -h, --help        Show this help");
@@ -80,7 +80,7 @@ async function main() {
     }
     const { localJoinFlow } = require("../lib/local");
     await localJoinFlow(args.joinOrg, ui);
-  } else if (args.local) {
+  } else if (args.open) {
     // ===== Local mode: founder (explicit opt-in) =====
     const { localFounderFlow } = require("../lib/local");
     await localFounderFlow(ui);

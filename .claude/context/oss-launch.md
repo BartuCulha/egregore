@@ -1,7 +1,7 @@
 Egregore ships as one codebase with two modes, set by `mode` in `egregore.json`:
 
 **Local mode** (`"mode": "local"`) — OSS. No API, no graph, no Telegram.
-Installed via `npx create-egregore --local`. All core commands work
+Installed via `npx create-egregore --open`. All core commands work
 with filesystem only: `/reflect`, `/handoff`, `/quest`, `/ask`,
 `/activity`, `/dashboard`, `/todo`, `/invite`. Memory is the source
 of truth. Never mention `/connect`, graph, or API features in local
