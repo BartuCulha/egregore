@@ -155,6 +155,40 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_type ON telemetry_events (type, ts DESC
 CREATE INDEX IF NOT EXISTS idx_telemetry_session ON telemetry_events (session_id);
 
 -- =============================================================================
+-- SESSION REPORTS (opt-in feedback from OSS users)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS session_reports (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    submitted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    report_type         TEXT NOT NULL DEFAULT 'session',
+    org_name            TEXT,
+    github_username     TEXT,
+    topic               TEXT,
+    summary             TEXT,
+    gaps                JSONB DEFAULT '[]',
+    description         TEXT,
+    system_info         JSONB DEFAULT '{}',
+    session_duration_ms INTEGER,
+    message_count       INTEGER,
+    github_issue_url    TEXT,
+    metadata            JSONB DEFAULT '{}'
+);
+
+ALTER TABLE session_reports ENABLE ROW LEVEL SECURITY;
+
+-- Anon can INSERT only (OSS users submit via Supabase anon key)
+CREATE POLICY "anon_insert_reports" ON session_reports
+    FOR INSERT TO anon WITH CHECK (true);
+
+-- Service role has full access (admin dashboard, webhook reads)
+CREATE POLICY "service_all_reports" ON session_reports
+    FOR ALL TO service_role USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_session_reports_submitted
+    ON session_reports (submitted_at DESC);
+
+-- =============================================================================
 -- HELPER: Auto-cleanup expired tokens (optional — can run via cron or pg_cron)
 -- =============================================================================
 

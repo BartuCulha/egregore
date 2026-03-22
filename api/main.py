@@ -5037,6 +5037,75 @@ async def spirits_pulse_report(body: PulseReport, org: dict = Depends(validate_a
         raise HTTPException(status_code=500, detail="Pulse report synthesis failed")
 
 
+# =============================================================================
+# SESSION REPORT NOTIFICATIONS (Supabase DB webhook → Telegram)
+# =============================================================================
+
+
+@app.post("/api/internal/report-notify")
+async def report_notify(request: Request):
+    """Called by Supabase DB webhook when a session_report is inserted.
+
+    Sends Telegram DM to oz (or org admin). Auth: shared secret via header.
+    """
+    # Validate webhook secret
+    webhook_secret = os.environ.get("REPORT_WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        raise HTTPException(status_code=501, detail="REPORT_WEBHOOK_SECRET not configured")
+
+    auth_header = request.headers.get("authorization", "")
+    auth_value = auth_header.replace("Bearer ", "").strip()
+    if not secrets.compare_digest(auth_value, webhook_secret):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    body = await request.json()
+    record = body.get("record", {})
+
+    report_type = record.get("report_type", "session")
+    topic = record.get("topic", "untitled")
+    github_username = record.get("github_username", "anonymous")
+    org_name = record.get("org_name", "unknown")
+    description = record.get("description", "")
+    gaps = record.get("gaps", [])
+
+    # Format Telegram message
+    gap_summary = ""
+    if gaps:
+        gap_types = [g.get("type", "unknown") for g in gaps[:3]]
+        gap_summary = f"\nGaps: {', '.join(gap_types)}"
+
+    desc_preview = ""
+    if description:
+        desc_preview = f"\n\n> {description[:200]}{'...' if len(description) > 200 else ''}"
+
+    msg = (
+        f"📋 New {report_type} report from {github_username} ({org_name}):\n"
+        f"**{topic}**{gap_summary}{desc_preview}"
+    )
+
+    # Send to curvelabs org (oz) — load org config
+    target_org = ORG_CONFIGS.get("curvelabs", {})
+    if not target_org and USE_SUPABASE:
+        try:
+            from .services.supabase import get_org
+            target_org = get_org("curvelabs") or {}
+        except Exception:
+            pass
+
+    if target_org:
+        try:
+            await send_message(target_org, "oz", msg)
+        except Exception as e:
+            logger.warning(f"Report notify Telegram failed: {e}")
+            # Fallback to group
+            try:
+                await send_group(target_org, msg)
+            except Exception:
+                pass
+
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))

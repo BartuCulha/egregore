@@ -353,6 +353,8 @@ async function localFounderFlow(ui) {
     slug: slug,
     repo_name: repoName,
     repos: selectedRepos,
+    report_url: "SUPABASE_PROJECT_URL", // TODO: replace with actual Supabase project URL
+    report_key: "SUPABASE_ANON_KEY", // TODO: replace with actual Supabase anon key (public, INSERT-only via RLS)
   };
   try {
     await putFileContent(
