@@ -9,8 +9,16 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# --- Guard: if project dir no longer exists (worktree deleted), allow gracefully ---
+if [ ! -d "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
 # --- Get current branch ---
-BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+# In a worktree, CWD is the worktree — git without -C returns the correct branch.
+# Fallback to -C PROJECT_DIR for non-worktree contexts.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || \
+  BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 
 # Only guard protected branches
 case "$BRANCH" in
@@ -23,23 +31,6 @@ INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
 
 if [ -z "$TOOL_NAME" ]; then
-  exit 0
-fi
-
-# --- EnterPlanMode is ALWAYS blocked on protected branches (no exceptions) ---
-# Everyone must create a branch before planning or working, including founders.
-if [[ "$TOOL_NAME" == "EnterPlanMode" ]]; then
-  AUTHOR=$(jq -r '.display_name // .name // "dev"' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || AUTHOR="dev"
-  echo "Protected branch: create a working branch first. Run: git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop" >&2
-  exit 2
-fi
-
-# --- Maintainer fast-path ---
-# Founders/maintainers can edit/commit directly on develop (not main).
-# This unblocks shipping fixes without waiting on PR reviews.
-# main is always protected — use /release for that.
-USAGE_TYPE=$(jq -r '.usage_type // empty' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || true
-if [[ "$USAGE_TYPE" == "founder_group" || "$USAGE_TYPE" == "founder_solo" ]] && [[ "$BRANCH" == "develop" ]]; then
   exit 0
 fi
 

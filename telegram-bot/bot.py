@@ -1892,7 +1892,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # In private chat, point to website
     if chat_type == "private":
-        site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
+        site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore.xyz")
         await update.message.reply_text(
             "Welcome to Egregore!\n\n"
             f"Get set up here: {site_url}/setup\n\n"
@@ -2026,7 +2026,7 @@ async def isolation_test_command(update: Update, context: ContextTypes.DEFAULT_T
 
 async def onboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /onboard command — redirect to website."""
-    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
+    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore.xyz")
     await update.message.reply_text(f"Get set up here: {site_url}/setup")
 
 
@@ -2258,7 +2258,7 @@ async def handle_member_update(update: Update, context: ContextTypes.DEFAULT_TYP
             org_slug=org_slug,
             action="join",
         )
-        site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
+        site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore.xyz")
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"Welcome {member.first_name}! Get set up here: {site_url}/setup",

@@ -1,6 +1,6 @@
 Save your contributions to Egregore. Pushes working branch, creates PR to develop.
 
-**Worktree note:** Git operations (commit, push, `gh pr create`) work normally from within a worktree — no special handling needed. After save completes, work continues in the worktree. Worktree cleanup happens automatically when the session ends (SessionEnd hook), never during an active session.
+**Worktree note:** Git operations (commit, push, `gh pr create`) work normally from within a worktree — no special handling needed. After save completes, work continues in the worktree. Worktree cleanup happens automatically when the session ends (WorktreeRemove hook), never during an active session.
 
 ## When to invoke
 
@@ -35,7 +35,7 @@ If the remote branch is gone:
 1. Use AskUserQuestion to ask:
    > Your branch `$CURRENT_BRANCH` was merged to develop. What's next?
    - **"Working on something new"** → ask what they're working on, derive topic slug, create `dev/$AUTHOR/$NEW_SLUG` in the same worktree
-   - **"I'm done for now"** → mark worktree for cleanup (same marker as /wrap Step 7.5), stop the save
+   - **"I'm done for now"** → session continues normally, worktree cleaned up on exit
 2. If in a worktree, stay in the same worktree — just switch branches within it
 3. Continue with save on the new branch
 

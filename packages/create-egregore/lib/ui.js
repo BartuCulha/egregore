@@ -69,11 +69,11 @@ function spinner(msg) {
   return {
     stop(result) {
       clearInterval(interval);
-      process.stdout.write(`\r  ${GREEN}✓${RESET} ${result || msg}\n`);
+      process.stdout.write(`\r\x1b[2K  ${GREEN}✓${RESET} ${result || msg}\n`);
     },
     fail(result) {
       clearInterval(interval);
-      process.stdout.write(`\r  ${RED}✗${RESET} ${result || msg}\n`);
+      process.stdout.write(`\r\x1b[2K  ${RED}✗${RESET} ${result || msg}\n`);
     },
   };
 }
@@ -93,12 +93,13 @@ function prompt(question) {
 }
 
 // Prompt with numbered choices
-async function choose(question, options) {
+async function choose(question, options, hint) {
   console.log(`\n  ${question}\n`);
   for (let i = 0; i < options.length; i++) {
     const { label, description } = options[i];
     console.log(`  ${BOLD}${i + 1}.${RESET} ${label}${description ? ` ${DIM}— ${description}${RESET}` : ""}`);
   }
+  if (hint) console.log(`\n  ${DIM}${hint}${RESET}`);
   console.log();
 
   while (true) {
@@ -137,7 +138,21 @@ async function multiSelect(question, options) {
   return selected;
 }
 
+function commandBox(label, cmd) {
+  const inner = `   ${cmd}   `;
+  const width = Math.max(inner.length, label.length + 5);
+  const pad = (s) => s + " ".repeat(Math.max(0, width - s.length));
+  const top = `┌─ ${label} ${"─".repeat(Math.max(0, width - label.length - 4))}┐`;
+  const blank = `│${" ".repeat(width)}│`;
+  const bot = `└${"─".repeat(width)}┘`;
+  console.log(`\n  ${DIM}${top}${RESET}`);
+  console.log(`  ${DIM}${blank}${RESET}`);
+  console.log(`  ${DIM}│${RESET}${BOLD}${pad(inner)}${RESET}${DIM}│${RESET}`);
+  console.log(`  ${DIM}${blank}${RESET}`);
+  console.log(`  ${DIM}${bot}${RESET}\n`);
+}
+
 module.exports = {
   banner, info, success, warn, error, step, dim, bold, cyan,
-  spinner, prompt, choose, multiSelect,
+  spinner, prompt, choose, multiSelect, commandBox,
 };

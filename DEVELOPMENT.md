@@ -17,6 +17,14 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Reads**: `.env` (EGREGORE_API_KEY), `egregore.json` (api_url)
 - **Writes**: Nothing
 - **External deps**: curl, jq, python3, date
+- **Usage**:
+  ```bash
+  bash bin/graph.sh test                                                    # Test connection
+  bash bin/graph.sh query "MATCH (p:Person) RETURN p.name"                 # Run a Cypher query
+  bash bin/graph.sh query "MATCH (p:Person {name: \$name}) RETURN p" '{"name":"alice"}'  # With parameters
+  bash bin/graph.sh schema                                                 # Show schema (labels + relationships)
+  ```
+- **Current schema**: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
 
 #### `graph-batch.sh`
 - **Purpose**: Execute multiple Cypher queries in a single HTTP call
@@ -47,6 +55,12 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Reads**: `.env` (EGREGORE_API_KEY), `egregore.json` (api_url)
 - **Writes**: Nothing
 - **External deps**: curl, jq
+- **Usage**:
+  ```bash
+  bash bin/notify.sh send "alice" "Hey Alice, new handoff about MCP auth"  # DM (falls back to group)
+  bash bin/notify.sh group "New quest started: research-agent"             # Group chat
+  bash bin/notify.sh test                                                  # Test connection
+  ```
 
 #### `session-start.sh`
 - **Purpose**: Session initialization — syncs develop, fixes API key, displays greeting, tracks health
@@ -172,6 +186,9 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Reads**: `egregore.json` (repos[])
 - **Writes**: Nothing
 - **External deps**: jq, realpath
+- **Session boundary** = this project directory + memory directory (resolved symlink) + managed repos from `egregore.json`
+- **Allowed paths**: this project dir, memory repo (via symlink), managed repos in `egregore.json` → `repos[]`, `~/.claude`, `/tmp`, system paths (`/usr`, `/etc`, `/bin`)
+- **Blocked paths**: other Egregore instance directories (from `~/.egregore/instances.json`), any path outside the boundary that isn't a system path
 
 #### `preflight.sh`
 - **Purpose**: Multi-tenancy violation detection (hardcoded orgs, direct API calls)
@@ -232,17 +249,12 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 
 ### Content Ingestion
 
-#### `granola.sh`
-- **Purpose**: Local cache reader for Granola meetings (no auth, no network)
-- **Reads**: `.egregore-state.json` (granola_folders)
-- **Writes**: Nothing
-- **External deps**: jq
-
-#### `granola-api.sh`
-- **Purpose**: API client for Granola's WorkOS API (meetings metadata + transcripts)
-- **Reads**: ~/Library/Application Support/Granola/supabase.json
-- **Writes**: Nothing
-- **External deps**: curl, jq
+#### Granola (MCP)
+- **Purpose**: Meeting data access via Granola's official MCP server
+- **Server**: `https://mcp.granola.ai/mcp` (configured in `.claude/mcp.json`)
+- **Auth**: OAuth 2.0 browser-based (via `/mcp` → Authenticate)
+- **Tools**: `list_meetings`, `get_meetings`, `get_meeting_transcript`, `query_granola_meetings`
+- **Setup**: `/connect granola`
 
 #### `connector-google.sh`
 - **Purpose**: Wrapper delegating to TypeScript connector implementation
@@ -440,7 +452,7 @@ bash bin/test-isolation.sh
 | `session_tracking` | Consent flag | session-start | onboarding (consent phase) |
 | `transcript_sharing` | Consent flag | transcript-archive | onboarding (consent phase) |
 | `telemetry` | Consent flag | telemetry.sh | onboarding (consent phase) |
-| `granola_folders` | Custom Granola paths | granola.sh | User config |
+| `connected_services` | Connector status (granola, google) | connect.md | User config |
 
 ### `.egregore-session-id` (gitignored — current session)
 
@@ -475,7 +487,7 @@ Commands that trigger the most infrastructure:
 | `/dashboard` | dashboard-data.sh |
 | `/reflect` | graph.sh, graph-batch.sh, telemetry.sh |
 | `/deep-reflect` | graph.sh, graph-batch.sh, telemetry.sh |
-| `/meeting` | granola.sh, graph.sh, graph-batch.sh, telemetry.sh |
+| `/meeting` | Granola MCP, graph.sh, graph-batch.sh, telemetry.sh |
 | `/onboarding` | graph.sh, github-auth.sh, telemetry.sh |
 | `/checkup` | github-auth.sh, graph.sh, notify.sh, ensure-shell-function.sh |
 | `/setup` | graph.sh, sync-repos.sh, github-auth.sh |

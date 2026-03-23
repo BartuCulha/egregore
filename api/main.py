@@ -903,7 +903,7 @@ async def org_claim(token: str):
 async def org_install_script(token: str):
     """Return a bash install script for users without Node.js.
 
-    Usage: curl -fsSL https://egregore-core.netlify.app/api/org/install/st_xxx | bash
+    Usage: curl -fsSL https://egregore.xyz/api/org/install/st_xxx | bash
     """
     from fastapi.responses import PlainTextResponse
 
@@ -1777,7 +1777,7 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
             logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{repo_name}")
 
     # Create invite token (7-day TTL)
-    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore-core.netlify.app")
+    site_url = os.environ.get("EGREGORE_SITE_URL", "https://egregore.xyz")
     invite_token = create_invite_token({
         "github_org": owner,
         "org_name": org_name,
@@ -1898,11 +1898,19 @@ async def org_invite_accept(invite_token: str, authorization: str = Header(...))
     # Get API key from server config (not from egregore.json — secrets don't go in git)
     api_key = await _get_org_api_key(org_config, slug) if org_config else ""
 
-    # Pass the user's GitHub token from website OAuth (has repo,read:org scope)
+    # Check if the user's token can actually access the repo (website OAuth may
+    # have insufficient scope, e.g. read:user only). If not, tell the CLI to run
+    # its own device flow which requests repo,read:org.
+    token_has_repo_access = config is not None  # config was read with this token above
+    if not token_has_repo_access:
+        # Double-check: maybe config read failed for another reason
+        token_has_repo_access = await gh.repo_exists(token, owner, invite_repo_name)
+
     setup_token = create_token({
         "fork_url": fork_url,
         "memory_url": memory_url,
-        "github_token": token,
+        "github_token": token if token_has_repo_access else "",
+        "needs_cli_auth": not token_has_repo_access,
         "api_key": api_key,
         "api_url": api_url,
         "org_name": org_name,
@@ -5027,6 +5035,75 @@ async def spirits_pulse_report(body: PulseReport, org: dict = Depends(validate_a
     except Exception as e:
         logger.error("[PULSE-REPORT] Error: %s", e)
         raise HTTPException(status_code=500, detail="Pulse report synthesis failed")
+
+
+# =============================================================================
+# SESSION REPORT NOTIFICATIONS (Supabase DB webhook → Telegram)
+# =============================================================================
+
+
+@app.post("/api/internal/report-notify")
+async def report_notify(request: Request):
+    """Called by Supabase DB webhook when a session_report is inserted.
+
+    Sends Telegram DM to oz (or org admin). Auth: shared secret via header.
+    """
+    # Validate webhook secret
+    webhook_secret = os.environ.get("REPORT_WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        raise HTTPException(status_code=501, detail="REPORT_WEBHOOK_SECRET not configured")
+
+    auth_header = request.headers.get("authorization", "")
+    auth_value = auth_header.replace("Bearer ", "").strip()
+    if not secrets.compare_digest(auth_value, webhook_secret):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    body = await request.json()
+    record = body.get("record", {})
+
+    report_type = record.get("report_type", "session")
+    topic = record.get("topic", "untitled")
+    github_username = record.get("github_username", "anonymous")
+    org_name = record.get("org_name", "unknown")
+    description = record.get("description", "")
+    gaps = record.get("gaps", [])
+
+    # Format Telegram message
+    gap_summary = ""
+    if gaps:
+        gap_types = [g.get("type", "unknown") for g in gaps[:3]]
+        gap_summary = f"\nGaps: {', '.join(gap_types)}"
+
+    desc_preview = ""
+    if description:
+        desc_preview = f"\n\n> {description[:200]}{'...' if len(description) > 200 else ''}"
+
+    msg = (
+        f"📋 New {report_type} report from {github_username} ({org_name}):\n"
+        f"**{topic}**{gap_summary}{desc_preview}"
+    )
+
+    # Send to curvelabs org (oz) — load org config
+    target_org = ORG_CONFIGS.get("curvelabs", {})
+    if not target_org and USE_SUPABASE:
+        try:
+            from .services.supabase import get_org
+            target_org = get_org("curvelabs") or {}
+        except Exception:
+            pass
+
+    if target_org:
+        try:
+            await send_message(target_org, "oz", msg)
+        except Exception as e:
+            logger.warning(f"Report notify Telegram failed: {e}")
+            # Fallback to group
+            try:
+                await send_group(target_org, msg)
+            except Exception:
+                pass
+
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

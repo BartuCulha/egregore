@@ -7,11 +7,12 @@
 .git/
 .env
 .env.local
-.env 2*
+.env 2
 .DS_Store
 .egregore-state.json
 .egregore-session-id
 egregore.json
+CLAUDE.md.backup
 .mcp.json
 mcp.json
 mcp.shared.*.json
@@ -43,6 +44,13 @@ egregore-graph.html
 egregore_part3.md
 neo4j_benchmark.py
 *.png
+
+# Internal context / audit files
+.claude/context/command-audit.md
+.claude/context/oss-launch.md
+
+# Graph metrics snapshots
+.witness-baseline.json
 
 # CL-internal infrastructure
 site
@@ -78,6 +86,7 @@ egregore.md
 # Generated / personal
 memory
 .egregore
+.egregore-worktree-pid
 .syncignore
 egregore-core
 oguzhan-memory

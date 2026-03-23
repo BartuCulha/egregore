@@ -14,18 +14,24 @@ function run(cmd, opts = {}) {
   return execSync(cmd, { stdio: "pipe", encoding: "utf-8", timeout: 60000, ...opts }).trim();
 }
 
-function ghApi(method, path, token) {
+function ghApi(method, apiPath, token, body) {
   return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "create-egregore",
+    };
+    if (payload) {
+      headers["Content-Type"] = "application/json";
+      headers["Content-Length"] = Buffer.byteLength(payload);
+    }
     const req = https.request(
       {
         hostname: "api.github.com",
-        path,
+        path: apiPath,
         method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "create-egregore",
-        },
+        headers,
       },
       (res) => {
         let buf = "";
@@ -40,8 +46,31 @@ function ghApi(method, path, token) {
       }
     );
     req.on("error", reject);
+    if (payload) req.write(payload);
     req.end();
   });
+}
+
+/**
+ * Initialize memory directory structure with .gitkeep files.
+ */
+function initMemoryDirs(memoryDir) {
+  const dirs = [
+    "people",
+    "handoffs",
+    "knowledge/decisions",
+    "knowledge/patterns",
+    "knowledge/findings",
+    "quests",
+    "wraps",
+  ];
+  for (const d of dirs) {
+    const fullPath = path.join(memoryDir, d);
+    if (!fs.existsSync(fullPath)) {
+      fs.mkdirSync(fullPath, { recursive: true });
+      fs.writeFileSync(path.join(fullPath, ".gitkeep"), "");
+    }
+  }
 }
 
 /**
@@ -182,6 +211,18 @@ async function install(data, ui, targetDir) {
     state.transcript_sharing = transcript_sharing;
   }
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
+
+  // 4c. Ensure mode is set in egregore.json (connected mode for API-based setup)
+  const configPath = path.join(egregoreDir, "egregore.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (!config.mode) {
+        config.mode = "connected";
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+      }
+    } catch {}
+  }
 
   // 5. Register instance + shell alias
   ui.step(5, totalSteps, "Registering instance...");
@@ -328,7 +369,7 @@ async function installShellAlias(egregoreDir, ui) {
       if (fs.existsSync(configPath)) {
         try { slug = JSON.parse(fs.readFileSync(configPath, "utf-8")).slug || ""; } catch {}
       }
-      defaultName = slug ? `egregore-${slug}` : "egregore-2";
+      defaultName = slug || "egregore-2";
     }
 
     // Ask user (skip prompt in non-interactive mode)
@@ -365,4 +406,14 @@ async function installShellAlias(egregoreDir, ui) {
   }
 }
 
-module.exports = { install };
+module.exports = {
+  install,
+  ghApi,
+  acceptPendingInvitations,
+  registerInstance,
+  installShellAlias,
+  embedToken,
+  configureGitCredentials,
+  initMemoryDirs,
+  run,
+};

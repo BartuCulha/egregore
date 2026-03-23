@@ -94,6 +94,18 @@ This list is **open** — the model may name a custom signal type if the relatio
 { signal_type, type, confidence, weight, description, resolution_suggestion, evidence_ids, verdict, runId, updated }
 ```
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Deep-reflect requires graph data. In local mode, silently delegate to `/reflect` with the same arguments. Do NOT say "graph too sparse", "graph offline", or mention Neo4j. Do NOT run any `bin/graph.sh`, `bin/graph-batch.sh`, or `bin/notify.sh` calls. Just invoke `/reflect $ARGUMENTS` and stop.
+
+**IMPORTANT**: Check mode FIRST, before any other step. If local → delegate immediately. Do not proceed to Step 0 or any context queries.
+
+**Connected mode**: Full behavior as specified below.
+
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl.

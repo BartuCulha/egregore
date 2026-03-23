@@ -92,7 +92,35 @@ else
           fi
           FIRST_SESSION="false"
         else
-          cat > "$STATE_FILE" << STATEEOF
+          # No state file — check graph to see if this person already exists
+          # (handles fresh clone / new machine for existing team members)
+          GRAPH_PERSON=""
+          GRAPH_DISPLAY_NAME=""
+          GRAPH_PERSON=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+            "MATCH (p:Person {github: \$github}) RETURN p.name AS name" \
+            "{\"github\":\"$GH_LOGIN\"}" 2>/dev/null || echo "")
+          if echo "$GRAPH_PERSON" | jq -e '.values | length > 0' &>/dev/null; then
+            GRAPH_DISPLAY_NAME=$(echo "$GRAPH_PERSON" | jq -r '.values[0][0] // empty' 2>/dev/null)
+            # Existing team member — skip onboarding
+            cat > "$STATE_FILE" << STATEEOF
+{
+  "github_username": "$GH_LOGIN",
+  "github_name": "${GH_NAME:-$GH_LOGIN}",
+  "name": "${GRAPH_DISPLAY_NAME:-${GH_NAME:-$GH_LOGIN}}",
+  "display_name": "${GRAPH_DISPLAY_NAME:-}",
+  "onboarding_complete": true,
+  "usage_type": "$USAGE_TYPE",
+  "session_tracking": true,
+  "transcript_sharing": true,
+  "telemetry": true,
+  "contact_preference": "all",
+  "telemetry_noticed": true
+}
+STATEEOF
+            FIRST_SESSION="false"
+          else
+            # Genuinely new user — trigger onboarding
+            cat > "$STATE_FILE" << STATEEOF
 {
   "github_username": "$GH_LOGIN",
   "github_name": "${GH_NAME:-$GH_LOGIN}",
@@ -102,7 +130,8 @@ else
   "first_session": true
 }
 STATEEOF
-          FIRST_SESSION="true"
+            FIRST_SESSION="true"
+          fi
         fi
       fi
     fi
@@ -147,33 +176,46 @@ if [ "$ONBOARDING_COMPLETE" != "true" ]; then
   exit 0
 fi
 
-# --- Auto-provision or fix EGREGORE_API_KEY (background, non-blocking) ---
+# --- Detect local mode and auto-provision API key ---
 ENV_FILE="$SCRIPT_DIR/.env"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
-# Check if key is missing OR if the key's slug doesn't match egregore.json slug
-KEY_NEEDS_FIX="false"
-if [ -f "$ENV_FILE" ]; then
-  CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
-  EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
-  if [ -z "$CURRENT_KEY" ]; then
-    KEY_NEEDS_FIX="true"
-  elif [ -n "$EXPECTED_SLUG" ]; then
-    # Extract slug from key: ek_<slug>_<secret> → <slug>
-    KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
-    if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
-      KEY_NEEDS_FIX="true"
-    fi
-  fi
+# Detect local mode: explicit mode field OR no api_url means intentionally local/OSS
+LOCAL_MODE="false"
+EGREGORE_MODE=$(jq -r '.mode // empty' "$CONFIG" 2>/dev/null)
+API_URL_CONFIGURED=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+if [ "$EGREGORE_MODE" = "local" ] || [ -z "$API_URL_CONFIGURED" ]; then
+  LOCAL_MODE="true"
 fi
 
-# Track API key health
-if [ "$KEY_NEEDS_FIX" = "true" ]; then
-  HEALTH_APIKEY="fail"
-elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
-  HEALTH_APIKEY="ok"
-else
-  HEALTH_APIKEY="fail"
+# In local mode, skip all key validation and auto-fix
+KEY_NEEDS_FIX="false"
+HEALTH_APIKEY="skip"
+
+if [ "$LOCAL_MODE" != "true" ]; then
+  # Check if key is missing OR if the key's slug doesn't match egregore.json slug
+  if [ -f "$ENV_FILE" ]; then
+    CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+    EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
+    if [ -z "$CURRENT_KEY" ]; then
+      KEY_NEEDS_FIX="true"
+    elif [ -n "$EXPECTED_SLUG" ]; then
+      # Extract slug from key: ek_<slug>_<secret> → <slug>
+      KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+      if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+        KEY_NEEDS_FIX="true"
+      fi
+    fi
+  fi
+
+  # Track API key health
+  if [ "$KEY_NEEDS_FIX" = "true" ]; then
+    HEALTH_APIKEY="fail"
+  elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
+    HEALTH_APIKEY="ok"
+  else
+    HEALTH_APIKEY="fail"
+  fi
 fi
 
 if [ "$KEY_NEEDS_FIX" = "true" ]; then
@@ -353,15 +395,34 @@ done
 # Wait for all fetches
 wait 2>/dev/null || true
 
-# --- Worktree orphan cleanup (background, non-blocking) ---
-bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+# --- Worktree orphan cleanup (background, throttled to max once/hour) ---
+_CLEANUP_MARKER="/tmp/egregore-cleanup-last-$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)"
+_RUN_CLEANUP="false"
+if [ ! -f "$_CLEANUP_MARKER" ]; then
+  _RUN_CLEANUP="true"
+else
+  _CM_MTIME=$(stat -f %m "$_CLEANUP_MARKER" 2>/dev/null || stat -c %Y "$_CLEANUP_MARKER" 2>/dev/null || echo "0")
+  _CM_NOW=$(date +%s)
+  [ $((_CM_NOW - _CM_MTIME)) -gt 3600 ] 2>/dev/null && _RUN_CLEANUP="true"
+fi
+if [ "$_RUN_CLEANUP" = "true" ]; then
+  touch "$_CLEANUP_MARKER" 2>/dev/null || true
+  bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+fi
 
 # --- Clean up stale worktree cleanup markers (from crashed sessions) ---
 (
+  _MK_NOW=$(date +%s)
   for MARKER_FILE in "$HOME/.egregore"/worktree-cleanup-*.marker; do
     [ -f "$MARKER_FILE" ] || continue
     WT_MARKER_PATH=$(cat "$MARKER_FILE" 2>/dev/null)
     if [ -n "$WT_MARKER_PATH" ] && [ -d "$WT_MARKER_PATH" ]; then
+      # Skip worktrees younger than 1 hour
+      _MK_MTIME=$(stat -f %m "$WT_MARKER_PATH" 2>/dev/null || stat -c %Y "$WT_MARKER_PATH" 2>/dev/null || echo "$_MK_NOW")
+      _MK_AGE=$((_MK_NOW - _MK_MTIME))
+      if [ "$_MK_AGE" -lt 3600 ] 2>/dev/null; then
+        continue
+      fi
       PID_FILE="$WT_MARKER_PATH/.egregore-worktree-pid"
       if [ -f "$PID_FILE" ]; then
         STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
@@ -688,22 +749,132 @@ fi
   git log --author="$AUTHOR" --format="%ar|%s" -1 2>/dev/null > "$CTX_DIR/activity" || echo "" > "$CTX_DIR/activity"
 ) &
 
-# 4. Team recent memory commits (background)
+# 3b. Personal todos from graph (background)
 (
-  JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/.git" ]; then
-    JSON="["
-    FIRST=true
-    while IFS='|' read -r T_AUTHOR T_TIME T_MSG; do
-      [ -z "$T_AUTHOR" ] && continue
-      T_MSG_ESC=$(echo "$T_MSG" | sed 's/"/\\"/g')
-      $FIRST || JSON="$JSON,"
-      JSON="$JSON{\"author\":\"$T_AUTHOR\",\"time\":\"$T_TIME\",\"message\":\"$T_MSG_ESC\"}"
-      FIRST=false
-    done <<< "$(git -C "$SCRIPT_DIR/memory" log --format="%an|%ar|%s" -5 2>/dev/null)"
-    JSON="$JSON]"
+  _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  _API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
+    TODO_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+      "MATCH (t:Todo)-[:BY]->(p:Person {github: \$me}) WHERE t.status IN ['open', 'blocked'] OPTIONAL MATCH (t)-[:PART_OF]->(q:Quest) RETURN t.text AS text, t.priority AS priority, t.status AS status, t.created AS created, q.id AS quest ORDER BY t.priority DESC, t.created DESC LIMIT 5" \
+      "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
+    if [ -n "$TODO_RAW" ]; then
+      echo "$TODO_RAW" | jq '[.values[] | {text: .[0], priority: (.[1] // 0), status: .[2], created: .[3], quest: (.[4] // "")}]' 2>/dev/null || echo "[]"
+    else
+      echo "[]"
+    fi
+  else
+    echo "[]"
   fi
-  echo "$JSON" > "$CTX_DIR/team"
+) > "$CTX_DIR/todos" 2>/dev/null &
+
+# 4. Team presence — last seen + active branches (background)
+(
+  # --- Read config inside subshell ---
+  _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  _API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+
+  # --- Graph: last-seen per person (excluding self) ---
+  GRAPH_DATA="[]"
+  if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, max(s.date) AS lastSeen ORDER BY lastSeen DESC"
+    GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
+    if [ -n "$GRAPH_RAW" ]; then
+      GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
+    fi
+  fi
+
+  # --- Git: active dev/* branches (excluding self) ---
+  SELF_LC=$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')
+  SELF_DISPLAY_LC=""
+  if [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
+    SELF_DISPLAY_LC=$(jq -r '.display_name // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  fi
+  BRANCH_DATA=$(git -C "$SCRIPT_DIR" branch -r --format='%(refname:short)' 2>/dev/null | grep "^origin/dev/" | sed 's|^origin/dev/||' || echo "")
+
+  BRANCH_MAP="{}"
+  if [ -n "$BRANCH_DATA" ]; then
+    BRANCH_MAP=$(echo "$BRANCH_DATA" | while IFS='/' read -r B_AUTHOR B_SLUG_REST || [ -n "$B_AUTHOR" ]; do
+      [ -z "$B_AUTHOR" ] && continue
+      B_AUTHOR_LC=$(echo "$B_AUTHOR" | tr '[:upper:]' '[:lower:]')
+      [ "$B_AUTHOR_LC" = "$SELF_LC" ] && continue
+      [ -n "$SELF_DISPLAY_LC" ] && [ "$B_AUTHOR_LC" = "$SELF_DISPLAY_LC" ] && continue
+      B_HUMAN=$(echo "$B_SLUG_REST" | tr '-' ' ')
+      echo "${B_AUTHOR_LC}|${B_HUMAN}"
+    done | jq -Rn '
+      [inputs | split("|") | {author: .[0], branch: .[1]}]
+      | group_by(.author)
+      | map({(.[0].author): [.[] | .branch]})
+      | add // {}
+    ' 2>/dev/null || echo "{}")
+  fi
+
+  # --- Relative time + epoch helpers (cross-platform) ---
+  NOW_EPOCH=$(date +%s)
+
+  iso_to_epoch() {
+    local iso="$1"
+    local clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
+    if command -v gdate &>/dev/null; then
+      gdate -d "$clean" +%s 2>/dev/null || echo "0"
+    else
+      date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
+      date -j -f "%Y-%m-%d" "${clean%%T*}" "+%s" 2>/dev/null || echo "0"
+    fi
+  }
+
+  epoch_to_relative() {
+    local epoch="$1"
+    [ "$epoch" = "0" ] && echo "--" && return
+    local delta=$(( NOW_EPOCH - epoch ))
+    if [ "$delta" -lt 60 ]; then echo "just now"
+    elif [ "$delta" -lt 3600 ]; then echo "$(( delta / 60 ))m ago"
+    elif [ "$delta" -lt 86400 ]; then echo "$(( delta / 3600 ))h ago"
+    elif [ "$delta" -lt 172800 ]; then echo "yesterday"
+    else echo "$(( delta / 86400 ))d ago"
+    fi
+  }
+
+  # --- Merge graph + branches into presence array ---
+  ALL_NAMES=$(echo "$GRAPH_DATA" | jq -r '.[].name' 2>/dev/null || echo "")
+  BRANCH_NAMES=$(echo "$BRANCH_MAP" | jq -r 'keys[]' 2>/dev/null || echo "")
+
+  UNION_NAMES=$(printf "%s\n%s" "$ALL_NAMES" "$BRANCH_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
+
+  if [ -z "$UNION_NAMES" ]; then
+    echo "[]" > "$CTX_DIR/team"
+    exit 0
+  fi
+
+  # --- Build presence JSON ---
+  PRESENCE="["
+  FIRST=true
+  for PNAME in $UNION_NAMES; do
+    LAST_SEEN_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
+    if [ -n "$LAST_SEEN_ISO" ]; then
+      LAST_SEEN_EPOCH=$(iso_to_epoch "$LAST_SEEN_ISO")
+      LAST_SEEN_REL=$(epoch_to_relative "$LAST_SEEN_EPOCH")
+    else
+      LAST_SEEN_EPOCH="0"
+      LAST_SEEN_REL="--"
+    fi
+
+    BRANCHES_JSON=$(echo "$BRANCH_MAP" | jq --arg n "$PNAME" '.[$n] // []' 2>/dev/null || echo "[]")
+    BR_COUNT=$(echo "$BRANCHES_JSON" | jq 'length' 2>/dev/null || echo "0")
+    if [ "$BR_COUNT" -gt 2 ]; then
+      EXTRA=$((BR_COUNT - 2))
+      BRANCHES_JSON=$(echo "$BRANCHES_JSON" | jq --arg e "+${EXTRA} more" '[.[0:2][], $e]' 2>/dev/null || echo "$BRANCHES_JSON")
+    fi
+
+    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" \
+      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches}')
+    $FIRST || PRESENCE="$PRESENCE,"
+    PRESENCE="$PRESENCE$ENTRY"
+    FIRST=false
+  done
+  PRESENCE="$PRESENCE]"
+
+  PRESENCE=$(echo "$PRESENCE" | jq 'sort_by(-.last_seen_sort)' 2>/dev/null || echo "$PRESENCE")
+  echo "$PRESENCE" > "$CTX_DIR/team"
 ) &
 
 # 5. Soul self-summary (background)
@@ -715,28 +886,50 @@ fi
   echo "$SUMMARY" > "$CTX_DIR/soul_summary"
 ) &
 
-# 6. Handoffs addressed to user (background)
+# 6. Handoffs addressed to user (background, enriched with author/topic)
 (
   JSON="[]"
+  RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | head -5 || true)
+    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     JSON="["
+    RICH="["
     FIRST=true
     for AF in $ADDRESSED; do
       [ -z "$AF" ] && continue
       AF_NAME=$(basename "$AF" .md)
+      AF_AUTHOR=$(sed -n 's/^\*\*Author\*\*: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_AUTHOR" ]; then
+        AF_AUTHOR=$(sed -n 's/^From: *//p' "$AF" 2>/dev/null | head -1)
+      fi
+      AF_TOPIC=$(sed -n 's/^# Handoff: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_TOPIC" ]; then
+        AF_TOPIC=$(sed -n 's/^# *//p' "$AF" 2>/dev/null | head -1)
+      fi
+      AF_DATE=$(sed -n 's/^\*\*Date\*\*: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_DATE" ]; then
+        AF_DATE=$(sed -n 's/^Date: *//p' "$AF" 2>/dev/null | head -1)
+      fi
       $FIRST || JSON="$JSON,"
+      $FIRST || RICH="$RICH,"
       JSON="$JSON\"$AF_NAME\""
+      AF_TOPIC_ESC=$(echo "$AF_TOPIC" | sed 's/"/\\"/g')
+      AF_AUTHOR_ESC=$(echo "$AF_AUTHOR" | sed 's/"/\\"/g')
+      RICH="$RICH{\"name\":\"$AF_NAME\",\"author\":\"$AF_AUTHOR_ESC\",\"topic\":\"$AF_TOPIC_ESC\",\"date\":\"$AF_DATE\"}"
       FIRST=false
     done
     JSON="$JSON]"
+    RICH="$RICH]"
   fi
   echo "$JSON" > "$CTX_DIR/addressed"
+  echo "$RICH" > "$CTX_DIR/addressed_rich"
 ) &
 
 # 7. Graph health (background — zero added latency, runs in parallel)
 (
-  if bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
     echo "ok"
   else
     echo "fail"
@@ -745,7 +938,9 @@ fi
 
 # 8. Telegram health (background)
 (
-  if bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
     echo "ok"
   else
     echo "fail"
@@ -854,7 +1049,11 @@ GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
 
 # Build identity line: Org/repo on left, user + branch on right
-IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+if [ "$LOCAL_MODE" = "true" ]; then
+  IDENTITY_LEFT="  Egregore (local mode)"
+else
+  IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+fi
 BRANCH_COMPACT="$BRANCH"
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
   BRANCH_COMPACT="${BRANCH} · ${COMMITS_AHEAD}↑"
@@ -868,35 +1067,129 @@ if [ "$ID_PADDING" -lt 1 ]; then ID_PADDING=1; fi
 printf "\n%s%*s%s\n" "$IDENTITY_LEFT" "$ID_PADDING" "" "$IDENTITY_RIGHT"
 echo "$SEPARATOR"
 
-# --- Team activity (secondary info) ---
-TEAM_JSON=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
-TEAM_COUNT=$(echo "$TEAM_JSON" | jq 'length' 2>/dev/null || echo "0")
-if [ "$TEAM_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_COUNT" != "0" ]; then
-  echo "$TEAM_JSON" | jq -r '.[] | "  \(.author)\t\(.message)\t\(.time)"' 2>/dev/null | while IFS=$'\t' read -r T_AUTHOR T_MSG T_TIME; do
-    # Extract first name only, lowercase
-    T_NAME=$(echo "$T_AUTHOR" | awk '{print tolower($1)}')
-    # Truncate message to fit
-    T_MSG_SHORT=$(echo "$T_MSG" | cut -c1-42)
-    # Right-align time
-    LEFT_PART="  ${T_NAME}    ${T_MSG_SHORT}"
-    LEFT_LEN=${#LEFT_PART}
-    TIME_LEN=${#T_TIME}
-    T_PAD=$((LINE_WIDTH - LEFT_LEN - TIME_LEN))
-    if [ "$T_PAD" -lt 1 ]; then T_PAD=1; fi
-    printf "%s%*s%s\n" "$LEFT_PART" "$T_PAD" "" "$T_TIME"
+# --- Shared rendering state ---
+TEAM_DATA=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
+TEAM_DATA_COUNT=$(echo "$TEAM_DATA" | jq 'length' 2>/dev/null || echo "0")
+NOW_RENDER=$(date +%s)
+ONLINE_THRESHOLD=7200  # 2 hours — considered "online"
+# Column layout: 2(indent) + 2(dot+space) + 9(name) + 12(time) + 40(info) = 65
+MAX_INFO=40
+
+# --- Section 1: For you (always present) ---
+echo "  ◦ for you"
+ADDRESSED_RICH=$(cat "$CTX_DIR/addressed_rich" 2>/dev/null || echo "[]")
+ADDRESSED_COUNT=$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")
+TODOS_DATA=$(cat "$CTX_DIR/todos" 2>/dev/null || echo "[]")
+TODOS_COUNT=$(echo "$TODOS_DATA" | jq 'length' 2>/dev/null || echo "0")
+
+# Handoffs addressed to you
+if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; then
+  echo "$ADDRESSED_RICH" | jq -r '.[] | "\(.author)\t\(.date)\t\(.topic)"' 2>/dev/null | while IFS=$'\t' read -r H_AUTHOR H_DATE H_TOPIC; do
+    [ -z "$H_AUTHOR" ] && continue
+    H_NAME=$(echo "$H_AUTHOR" | awk '{print tolower($1)}')
+    if [ ${#H_NAME} -gt 8 ]; then H_NAME="${H_NAME:0:8}"; fi
+    # Online status from team presence data
+    H_SEEN_EPOCH=$(echo "$TEAM_DATA" | jq -r --arg n "$H_NAME" '[.[] | select((.name | ascii_downcase) == $n) | .last_seen_sort] | .[0] // 0' 2>/dev/null || echo "0")
+    if [ "$H_SEEN_EPOCH" -gt 0 ] 2>/dev/null && [ $(( NOW_RENDER - H_SEEN_EPOCH )) -lt $ONLINE_THRESHOLD ] 2>/dev/null; then
+      DOT="●"
+    else
+      DOT="○"
+    fi
+    # Convert date to relative
+    H_EPOCH=$(date -j -f "%Y-%m-%d" "${H_DATE%%T*}" "+%s" 2>/dev/null || \
+              date -d "${H_DATE%%T*}" "+%s" 2>/dev/null || echo "0")
+    H_DELTA=$(( NOW_RENDER - H_EPOCH ))
+    if [ "$H_DELTA" -lt 86400 ] 2>/dev/null; then H_AGO="today"
+    elif [ "$H_DELTA" -lt 172800 ] 2>/dev/null; then H_AGO="yesterday"
+    else H_AGO="$(( H_DELTA / 86400 ))d ago"
+    fi
+    if [ ${#H_TOPIC} -gt $MAX_INFO ]; then H_TOPIC="${H_TOPIC:0:$((MAX_INFO - 1))}…"; fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$H_NAME" "$H_AGO" "$H_TOPIC"
   done
 fi
 
-# Show lifecycle events (merged PRs + implemented handoffs)
+# Personal todos
+if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
+  echo "$TODOS_DATA" | jq -r '.[] | "\(.text)\t\(.created // "")\t\(.quest // "")\t\(.status)"' 2>/dev/null | head -3 | while IFS=$'\t' read -r T_TEXT T_CREATED T_QUEST T_STATUS; do
+    [ -z "$T_TEXT" ] && continue
+    if [ "$T_STATUS" = "blocked" ]; then DOT="✗"; else DOT="□"; fi
+    T_SRC="${T_QUEST:-todo}"
+    if [ ${#T_SRC} -gt 8 ]; then T_SRC="${T_SRC:0:8}"; fi
+    # Parse created date to relative
+    T_AGO="--"
+    if [ -n "$T_CREATED" ]; then
+      T_CLEAN=$(echo "$T_CREATED" | sed 's/Z$//; s/+00:00$//')
+      T_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$T_CLEAN" "+%s" 2>/dev/null || \
+                date -j -f "%Y-%m-%d" "${T_CLEAN%%T*}" "+%s" 2>/dev/null || \
+                date -d "$T_CLEAN" "+%s" 2>/dev/null || \
+                date -d "${T_CLEAN%%T*}" "+%s" 2>/dev/null || echo "0")
+      if [ "$T_EPOCH" -gt 0 ] 2>/dev/null; then
+        T_DELTA=$(( NOW_RENDER - T_EPOCH ))
+        if [ "$T_DELTA" -lt 86400 ]; then T_AGO="today"
+        elif [ "$T_DELTA" -lt 172800 ]; then T_AGO="yesterday"
+        else T_AGO="$(( T_DELTA / 86400 ))d ago"
+        fi
+      fi
+    fi
+    if [ ${#T_TEXT} -gt $MAX_INFO ]; then T_TEXT="${T_TEXT:0:$((MAX_INFO - 1))}…"; fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$T_SRC" "$T_AGO" "$T_TEXT"
+  done
+fi
+
+# Fallback: last activity if no handoffs and no todos
+if { [ "$ADDRESSED_COUNT" = "0" ] || [ -z "$ADDRESSED_COUNT" ]; } && \
+   { [ "$TODOS_COUNT" = "0" ] || [ -z "$TODOS_COUNT" ]; }; then
+  LAST_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
+  if [ -n "$LAST_ACTIVITY" ]; then
+    LA_TIME=$(echo "$LAST_ACTIVITY" | cut -d'|' -f1)
+    # Compact relative time: "20 hours ago" → "20h ago", "3 days ago" → "3d ago"
+    LA_TIME=$(echo "$LA_TIME" | sed 's/ hours\{0,1\} ago/h ago/; s/ days\{0,1\} ago/d ago/; s/ minutes\{0,1\} ago/m ago/; s/ weeks\{0,1\} ago/w ago/; s/ months\{0,1\} ago/mo ago/')
+    LA_MSG=$(echo "$LAST_ACTIVITY" | cut -d'|' -f2-)
+    if [ ${#LA_MSG} -gt $MAX_INFO ]; then LA_MSG="${LA_MSG:0:$((MAX_INFO - 1))}…"; fi
+    printf "  ◇ %-9s%-12s%s\n" "you" "$LA_TIME" "$LA_MSG"
+  fi
+fi
+
+echo ""
+# --- Section 2: Around (team presence with online status) ---
+if [ "$TEAM_DATA_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_DATA_COUNT" != "0" ]; then
+  echo "  ◦ around"
+  # Presence roster with online/offline dots (hide inactive >5 days)
+  STALE_THRESHOLD=$((5 * 86400))
+  echo "$TEAM_DATA" | jq -r '.[] | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(.branches | join(", "))"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
+    [ -z "$P_NAME" ] && continue
+    # Skip if last seen >5 days ago (or never seen)
+    if [ "$P_EPOCH" -le 0 ] 2>/dev/null || [ $(( NOW_RENDER - P_EPOCH )) -ge $STALE_THRESHOLD ] 2>/dev/null; then
+      continue
+    fi
+    if [ ${#P_NAME} -gt 8 ]; then P_NAME="${P_NAME:0:8}"; fi
+    # Online: last seen within threshold
+    if [ $(( NOW_RENDER - P_EPOCH )) -lt $ONLINE_THRESHOLD ] 2>/dev/null; then
+      DOT="●"
+    else
+      DOT="○"
+    fi
+    if [ ${#P_BRANCHES} -gt $MAX_INFO ]; then
+      P_BRANCHES="${P_BRANCHES:0:$((MAX_INFO - 9))}... +more"
+    fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$P_NAME" "$P_SEEN" "$P_BRANCHES"
+  done
+fi
+
+# --- Section 3: Recently merged PRs + implemented handoffs ---
 LIFECYCLE_JSON=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{}')
 MERGED_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.merged_prs.values // [] | length' 2>/dev/null || echo "0")
 IMPL_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.implemented_handoffs.values // [] | length' 2>/dev/null || echo "0")
 
-if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null; then
-  echo "$LIFECYCLE_JSON" | jq -r '.merged_prs.values[]? // empty | "  ✓ PR #\(.[0]) merged (\(.[1]))"' 2>/dev/null || true
-fi
-if [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
-  echo "$LIFECYCLE_JSON" | jq -r '.implemented_handoffs.values[]? // empty | "  ✓ \(.[1]) worked on your handoff: \(.[0])"' 2>/dev/null || true
+if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null || [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
+  echo ""
+  echo "  ◦ merged"
+  if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null; then
+    echo "$LIFECYCLE_JSON" | jq -r '.merged_prs.values[]? // empty | "  ✓ PR #\(.[0]) \(.[1])"' 2>/dev/null || true
+  fi
+  if [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
+    echo "$LIFECYCLE_JSON" | jq -r '.implemented_handoffs.values[]? // empty | "  ✓ \(.[1]) worked on your handoff"' 2>/dev/null || true
+  fi
 fi
 
 # Show auto-save notice if work was committed from a previous branch
@@ -908,43 +1201,79 @@ fi
 echo "$SEPARATOR"
 
 # Build compact footer line
-# Health: show "✓ ready" if all pass, otherwise list failures
-HAS_FAILURE="false"
-FAILED_SERVICES=""
-for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
-  svc="${pair%%:*}"
-  status="${pair#*:}"
-  if [ "$status" = "fail" ]; then
-    HAS_FAILURE="true"
-    FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
-  fi
-done
-
-if [ "$HAS_FAILURE" = "true" ]; then
-  echo "  ⚠${FAILED_SERVICES} — run /checkup"
-else
-  # Compact footer: ready + repos + memory
-  FOOTER_LEFT="  ✓ ready"
-
-  # Add managed repos inline
-  if [ -n "$REPOS_STATUS" ]; then
-    # Extract repo info into compact format (strip ornaments)
-    REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
-    if [ -n "$REPOS_COMPACT" ]; then
-      FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+if [ "$LOCAL_MODE" = "true" ]; then
+  # Local mode: only check github + git, skip api-key/graph/telegram
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
     fi
-  fi
+  done
 
-  FOOTER_RIGHT=""
-  if [ "$MEMORY_SYNCED" = "true" ]; then
-    FOOTER_RIGHT="◆ memory synced"
-  fi
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
+  else
+    FOOTER_LEFT="  ✓ local"
 
-  FL_LEN=${#FOOTER_LEFT}
-  FR_LEN=${#FOOTER_RIGHT}
-  F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
-  if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
-  printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT="local mode"
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+  fi
+else
+  # Connected mode: check all services
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
+    fi
+  done
+
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
+  else
+    # Compact footer: ready + repos + memory
+    FOOTER_LEFT="  ✓ ready"
+
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      # Extract repo info into compact format (strip ornaments)
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT=""
+    if [ "$MEMORY_SYNCED" = "true" ]; then
+      FOOTER_RIGHT="◆ memory synced"
+    fi
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+  fi
 fi
 
 # Framework updates come through PRs to develop — no separate auto-update channel.

@@ -9,6 +9,18 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# --- Local mode gate: bail immediately, no .env sourcing, no network ---
+_MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  case "${1:-}" in
+    query)  echo '{"results":[]}';;
+    schema) echo '{}';;
+    test)   echo '{"status":"offline","reason":"local_mode"}';;
+    *)      echo '{"results":[]}';;
+  esac
+  exit 0
+fi
+
 # Source .env if it exists (for local overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a; source "$SCRIPT_DIR/.env"; set +a
@@ -100,8 +112,10 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
   }
 
 else
-  echo "Error: EGREGORE_API_KEY not set. Add it to .env (get it from your team admin or during setup)." >&2
-  exit 1
+  # === OFFLINE MODE: No API key — return empty results (OSS/local) ===
+  run_query() { echo '{"results":[]}'; }
+  get_schema() { echo '{}'; }
+  test_connection() { echo '{"status":"offline","reason":"no_api_key"}'; }
 fi
 
 case "${1:-help}" in

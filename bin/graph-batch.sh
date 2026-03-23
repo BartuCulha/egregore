@@ -17,6 +17,13 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# --- Local mode gate: bail immediately ---
+_MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  echo '{"results":[]}'
+  exit 0
+fi
+
 # Source .env if it exists
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a; source "$SCRIPT_DIR/.env"; set +a
@@ -26,8 +33,9 @@ API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
 API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
-  echo "Error: API mode required for batch queries. Set EGREGORE_API_KEY in .env." >&2
-  exit 1
+  # === OFFLINE MODE: No API key — return empty results (OSS/local) ===
+  echo '{"results":[]}'
+  exit 0
 fi
 
 QUERIES_JSON="${1:?Usage: graph-batch.sh '<json array of queries>'}"

@@ -3,20 +3,23 @@
 /**
  * create-egregore — Set up Egregore in one command.
  *
- * Two modes:
- *   npx create-egregore --token st_xxxx   (from website — primary path)
- *   npx create-egregore                    (terminal-only fallback)
+ * Four modes:
+ *   npx create-egregore --token st_xxxx   (from website — connected mode)
+ *   npx create-egregore                    (interactive — API-based, existing)
+ *   npx create-egregore --open            (local mode — founder, no API)
+ *   npx create-egregore join <org>         (local mode — join existing)
  */
 
 const ui = require("../lib/ui");
 const { EgregoreAPI } = require("../lib/api");
 const { deviceFlow } = require("../lib/auth");
-const { install } = require("../lib/setup");
+const { install, ghApi } = require("../lib/setup");
 
 const API_URL = process.env.EGREGORE_API_URL || "https://egregore-production-55f2.up.railway.app";
 
 function parseArgs(argv) {
   const args = {};
+  const positional = [];
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--token" && argv[i + 1]) {
       args.token = argv[++i];
@@ -24,9 +27,17 @@ function parseArgs(argv) {
       args.token = argv[i].split("=")[1];
     } else if (argv[i] === "--api" && argv[i + 1]) {
       args.api = argv[++i];
+    } else if (argv[i] === "--open") {
+      args.open = true;
     } else if (argv[i] === "--help" || argv[i] === "-h") {
       args.help = true;
+    } else if (!argv[i].startsWith("-")) {
+      positional.push(argv[i]);
     }
+  }
+  if (positional[0] === "join") {
+    args.subcommand = "join";
+    args.joinOrg = positional[1];
   }
   return args;
 }
@@ -34,11 +45,14 @@ function parseArgs(argv) {
 function showHelp() {
   ui.banner();
   ui.info("Usage:");
-  ui.info("  npx create-egregore --token <setup-token>   Install from website");
-  ui.info("  npx create-egregore                          Interactive setup");
+  ui.info("  npx create-egregore                          Interactive setup (API)");
+  ui.info("  npx create-egregore --open                  New project (local mode)");
+  ui.info("  npx create-egregore join <org>[/<repo>]       Join existing project");
+  ui.info("  npx create-egregore --token <setup-token>    Install from website");
   ui.info("");
   ui.info("Options:");
-  ui.info("  --token <token>   Setup token from egregore-core.netlify.app");
+  ui.info("  --open           Local mode — no API server needed");
+  ui.info("  --token <token>   Setup token from egregore.xyz");
   ui.info("  --api <url>       API URL override");
   ui.info("  -h, --help        Show this help");
   ui.info("");
@@ -52,15 +66,27 @@ async function main() {
     process.exit(0);
   }
 
-  const api = new EgregoreAPI(args.api || API_URL);
-
   ui.banner();
 
   if (args.token) {
-    // ===== Website flow: token provided =====
+    // ===== Connected mode: token provided (unchanged) =====
+    const api = new EgregoreAPI(args.api || API_URL);
     await tokenFlow(api, args.token);
+  } else if (args.subcommand === "join") {
+    // ===== Local mode: join existing =====
+    if (!args.joinOrg) {
+      ui.error("Usage: npx create-egregore join <github-org>");
+      process.exit(1);
+    }
+    const { localJoinFlow } = require("../lib/local");
+    await localJoinFlow(args.joinOrg, ui);
+  } else if (args.open) {
+    // ===== Local mode: founder (explicit opt-in) =====
+    const { localFounderFlow } = require("../lib/local");
+    await localFounderFlow(ui);
   } else {
-    // ===== Terminal fallback: interactive =====
+    // ===== Interactive API flow (default — existing behavior) =====
+    const api = new EgregoreAPI(args.api || API_URL);
     await interactiveFlow(api);
   }
 }
@@ -76,7 +102,7 @@ async function tokenFlow(api, token) {
     ui.error(err.message);
     ui.info("");
     ui.info("The token may have expired or already been used.");
-    ui.info("Visit egregore-core.netlify.app to get a new one, or run without --token:");
+    ui.info("Visit egregore.xyz to get a new one, or run without --token:");
     ui.info("  npx create-egregore");
     process.exit(1);
   }
@@ -227,6 +253,35 @@ async function setupFlow(api, githubToken, choice) {
     }
   } catch {
     // Non-fatal — continue without repos
+  }
+
+  // Offer to create a new project repo
+  console.log("");
+  const newRepoName = await ui.prompt("Create a new project repo? Enter name (or press Enter to skip):");
+  if (newRepoName) {
+    const repoSlug = newRepoName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (repoSlug) {
+      const s2 = ui.spinner(`Creating ${repoSlug}...`);
+      try {
+        const apiPath = choice.is_personal ? "/user/repos" : `/orgs/${choice.login}/repos`;
+        const { status } = await ghApi("POST", apiPath, githubToken, {
+          name: repoSlug,
+          private: true,
+          auto_init: true,
+        });
+        if (status === 201 || status === 200) {
+          selectedRepos.push(repoSlug);
+          s2.stop(`Created ${repoSlug}`);
+        } else if (status === 422) {
+          selectedRepos.push(repoSlug);
+          s2.stop(`${repoSlug} already exists — added to managed repos`);
+        } else {
+          s2.fail(`Could not create ${repoSlug}`);
+        }
+      } catch (err) {
+        s2.fail(`Could not create ${repoSlug}: ${err.message}`);
+      }
+    }
   }
 
   // Transcript sharing consent
