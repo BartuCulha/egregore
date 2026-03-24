@@ -8,6 +8,7 @@
 .env
 .env.local
 .env 2
+.env 2.example
 .DS_Store
 .egregore-state.json
 .egregore-session-id
