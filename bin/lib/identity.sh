@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # identity.sh — User identity resolution for session-start.sh
 #
 # Resolves the current user's identity through multiple fallback layers:

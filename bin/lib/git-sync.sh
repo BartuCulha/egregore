@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # git-sync.sh — Git synchronization for session-start.sh
 #
 # Handles all git operations during session startup:

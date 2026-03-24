@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # greeting.sh — Greeting output renderer for session-start.sh
 #
 # Renders the full session greeting:

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # context.sh — Context gathering for session-start.sh
 #
 # Runs 10 parallel background subshells to gather session context:
