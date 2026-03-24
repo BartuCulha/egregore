@@ -103,7 +103,8 @@ cmd_append() {
   echo "$line" >> "$WAL_FILE"
 
   # Buffer guard: truncate to last N entries if file exceeds max size
-  if [ -f "$WAL_FILE" ]; then
+  # Only safe under lock — tail+mv is not atomic and races with concurrent writers
+  if [ "$_locked" = "true" ] && [ -f "$WAL_FILE" ]; then
     local size
     size=$(wc -c < "$WAL_FILE" 2>/dev/null | tr -d ' ')
     if [ "$size" -gt "$MAX_BUFFER_BYTES" ] 2>/dev/null; then

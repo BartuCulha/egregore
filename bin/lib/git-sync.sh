@@ -205,13 +205,19 @@ if [ "$IS_WORKTREE" = "true" ]; then
     fi
   fi
 
-  if [ "$WORKTREE_STALE" != "false" ]; then
+  if [ "$WORKTREE_STALE" = "merged" ]; then
     echo ""
     echo "WARNING: Branch '$BRANCH' was already merged into develop."
     echo "This worktree is stale — your work here is already in develop."
     echo "Start a new session in the main project to get a fresh branch."
     echo ""
     HEALTH_GIT="fail"
+  elif [ "$WORKTREE_STALE" = "remote_deleted" ]; then
+    echo ""
+    echo "WARNING: Remote branch '$BRANCH' was deleted but NOT merged into develop."
+    echo "This worktree may contain unique local commits. Check before discarding:"
+    echo "  git log origin/develop..HEAD --oneline"
+    echo ""
   fi
 
   # Use main project's .env and state if ours are missing
