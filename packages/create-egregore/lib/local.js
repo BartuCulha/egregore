@@ -18,10 +18,9 @@ const {
   run,
 } = require("./setup");
 
-// Template repo for new egregore instances
-// TODO: Change to egregore-ai/egregore when OSS repo exists
-const TEMPLATE_OWNER = "Curve-Labs";
-const TEMPLATE_REPO = "egregore-core";
+// Template repo for new egregore instances (OSS)
+const TEMPLATE_OWNER = "egregore-labs";
+const TEMPLATE_REPO = "egregore";
 
 // ── GitHub API helpers ──────────────────────────────────────────────
 
@@ -353,7 +352,7 @@ async function localFounderFlow(ui) {
     slug: slug,
     repo_name: repoName,
     repos: selectedRepos,
-    upstream_url: "https://github.com/Curve-Labs/egregore-core.git",
+    upstream_url: "https://github.com/egregore-labs/egregore.git",
     report_url: "https://xgksfrirtdumacvmfkzj.supabase.co",
     report_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhna3NmcmlydGR1bWFjdm1ma3pqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5OTA1ODksImV4cCI6MjA4NjU2NjU4OX0.1UWNgER6nQazrayly1KDrswClURUkGKxeirZg5L8uk4",
   };
