@@ -97,8 +97,9 @@ cmd_append() {
     --argjson params "$params" \
     '{ts: $ts, sid: $sid, cypher: $cypher, params: $params}')
 
-  # Append under lock
-  _lock || return 0
+  # Append under lock — if lock fails, append anyway (durability > mutual exclusion)
+  local _locked=true
+  _lock || _locked=false
   echo "$line" >> "$WAL_FILE"
 
   # Buffer guard: truncate to last N entries if file exceeds max size
@@ -118,7 +119,7 @@ cmd_append() {
         || rm -f "$tmp"
     fi
   fi
-  _unlock
+  [ "$_locked" = "true" ] && _unlock
 }
 
 # --- drain: execute pending entries via graph-batch.sh ---

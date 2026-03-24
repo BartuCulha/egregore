@@ -23,14 +23,14 @@ create_test_env() {
 }
 JSON
 
-  # Minimal state file (onboarding complete)
+  # Minimal state file (onboarding complete, telemetry enabled so tests can validate opt-out)
   cat > "$TEST_ENV/.egregore-state.json" << 'JSON'
 {
   "github_username": "testuser",
   "github_name": "Test User",
   "name": "testuser",
   "onboarding_complete": true,
-  "telemetry": false
+  "telemetry": true
 }
 JSON
 
