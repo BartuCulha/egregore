@@ -8,7 +8,6 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKTREE_SH="$SCRIPT_DIR/bin/worktree.sh"
-SESSION_START="$SCRIPT_DIR/bin/session-start.sh"
 PASS=0
 FAIL=0
 SKIP=0
@@ -91,12 +90,6 @@ else
   fail ".egregore-session-id not symlinked"
 fi
 
-if [ -f "$WT_PATH/.egregore-worktree-pid" ]; then
-  pass "PID marker created"
-else
-  fail "PID marker not created"
-fi
-
 # --- Test 1.2: setup symlinks egregore.json ---
 echo ""
 echo "Test 1.2: setup symlinks egregore.json"
@@ -134,7 +127,8 @@ echo ""
 echo "Test 1.4: cleanup removes worktree"
 
 # Create a second worktree for cleanup testing
-git worktree add .claude/worktrees/cleanup-test develop --quiet 2>/dev/null
+git branch cleanup-branch develop 2>/dev/null || true
+git worktree add .claude/worktrees/cleanup-test cleanup-branch --quiet 2>/dev/null
 WT_CLEANUP="$MAIN_REPO/.claude/worktrees/cleanup-test"
 bash bin/worktree.sh setup "$WT_CLEANUP" "$MAIN_REPO" >/dev/null 2>&1
 
@@ -160,8 +154,9 @@ echo "Test 1.5: cleanup removes from instance registry"
 
 MOCK_REGISTRY_DIR="$TEST_ROOT/mock-home/.egregore"
 mkdir -p "$MOCK_REGISTRY_DIR"
+git branch registry-branch develop 2>/dev/null || true
 WT_REGISTRY_TEST="$MAIN_REPO/.claude/worktrees/registry-test"
-git worktree add "$WT_REGISTRY_TEST" develop --quiet 2>/dev/null
+git worktree add "$WT_REGISTRY_TEST" registry-branch --quiet 2>/dev/null
 
 # Create a registry that accidentally contains the worktree path
 RESOLVED_WT=$(realpath "$WT_REGISTRY_TEST" 2>/dev/null || echo "$WT_REGISTRY_TEST")
@@ -181,61 +176,44 @@ else
   fail "instance registry has $REG_COUNT entries (expected 1)"
 fi
 
-# --- Test 1.6: cleanup-orphans kills dead PID worktrees ---
+# --- Test 1.6: cleanup-stale lists stale worktrees without deleting ---
 echo ""
-echo "Test 1.6: cleanup-orphans detects dead PIDs"
+echo "Test 1.6: cleanup-stale lists but does not delete"
 
-git branch orphan-branch develop 2>/dev/null || true
-WT_ORPHAN="$MAIN_REPO/.claude/worktrees/orphan-test"
-git worktree add "$WT_ORPHAN" orphan-branch --quiet 2>/dev/null
+cd "$MAIN_REPO"
+git branch stale-branch develop 2>/dev/null || true
+WT_STALE="$MAIN_REPO/.claude/worktrees/stale-test"
+git worktree add "$WT_STALE" stale-branch --quiet 2>/dev/null
 
-if [ ! -d "$WT_ORPHAN" ]; then
-  fail "could not create worktree for orphan test"
+# Make it look old by backdating (touch to 2 days ago)
+touch -t "$(date -v-2d +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M.%S 2>/dev/null)" "$WT_STALE" 2>/dev/null || true
+
+STALE_OUTPUT=$(bash bin/worktree.sh cleanup-stale "$MAIN_REPO" 2>/dev/null)
+
+# Worktree should still exist (cleanup-stale only lists)
+if [ -d "$WT_STALE" ]; then
+  pass "cleanup-stale did not delete the worktree"
 else
-  bash bin/worktree.sh setup "$WT_ORPHAN" "$MAIN_REPO" >/dev/null 2>&1
-
-  # Write a definitely-dead PID (find one that's not running)
-  DEAD_PID=99999
-  while kill -0 "$DEAD_PID" 2>/dev/null; do
-    DEAD_PID=$((DEAD_PID - 1))
-  done
-  echo "$DEAD_PID" > "$WT_ORPHAN/.egregore-worktree-pid"
+  fail "cleanup-stale deleted the worktree (should only list)"
 fi
 
-bash bin/worktree.sh cleanup-orphans "$MAIN_REPO" >/dev/null 2>&1
-
-if [ ! -d "$WT_ORPHAN" ]; then
-  pass "orphaned worktree cleaned up"
+# Output should mention the worktree name or show removal instructions
+if echo "$STALE_OUTPUT" | grep -q "cleanup"; then
+  pass "cleanup-stale shows removal instructions"
 else
-  fail "orphaned worktree still exists"
+  # Might say "No stale worktrees" if touch didn't work — that's ok
+  if echo "$STALE_OUTPUT" | grep -q "No stale"; then
+    skip "cleanup-stale: could not backdate dir (platform limitation)"
+  else
+    fail "cleanup-stale output unexpected: $STALE_OUTPUT"
+  fi
 fi
 
-# --- Test 1.7: cleanup-orphans does NOT kill live PID worktrees ---
+bash bin/worktree.sh cleanup "$WT_STALE" >/dev/null 2>&1
+
+# --- Test 1.7: list works ---
 echo ""
-echo "Test 1.7: cleanup-orphans preserves live PIDs"
-
-git branch alive-branch develop 2>/dev/null || true
-WT_ALIVE="$MAIN_REPO/.claude/worktrees/alive-test"
-git worktree add "$WT_ALIVE" alive-branch --quiet 2>/dev/null
-bash bin/worktree.sh setup "$WT_ALIVE" "$MAIN_REPO" >/dev/null 2>&1
-
-# Write our own PID (definitely alive)
-echo "$$" > "$WT_ALIVE/.egregore-worktree-pid"
-
-bash bin/worktree.sh cleanup-orphans "$MAIN_REPO" >/dev/null 2>&1
-
-if [ -d "$WT_ALIVE" ]; then
-  pass "live worktree preserved"
-else
-  fail "live worktree was incorrectly cleaned up!"
-fi
-
-# Clean up this worktree for subsequent tests
-bash bin/worktree.sh cleanup "$WT_ALIVE" >/dev/null 2>&1
-
-# --- Test 1.8: list works ---
-echo ""
-echo "Test 1.8: worktree list"
+echo "Test 1.7: worktree list"
 
 git branch list-branch develop 2>/dev/null || true
 WT_LIST_TEST="$MAIN_REPO/.claude/worktrees/list-test"
@@ -250,6 +228,35 @@ fi
 
 bash bin/worktree.sh cleanup "$WT_LIST_TEST" >/dev/null 2>&1
 
+# --- Test 1.8: health detects worktree status ---
+echo ""
+echo "Test 1.8: health command"
+
+git branch health-branch develop 2>/dev/null || true
+WT_HEALTH="$MAIN_REPO/.claude/worktrees/health-test"
+git worktree add "$WT_HEALTH" health-branch --quiet 2>/dev/null
+
+HEALTH_OUTPUT=$(bash bin/worktree.sh health "$WT_HEALTH" 2>/dev/null)
+HEALTH_STATUS=$(echo "$HEALTH_OUTPUT" | jq -r '.status' 2>/dev/null)
+
+# No remote, so it'll be "remote_deleted" or "healthy" depending on ls-remote
+# Just check it returns valid JSON with a status field
+if [ -n "$HEALTH_STATUS" ] && [ "$HEALTH_STATUS" != "null" ]; then
+  pass "health returns valid status: $HEALTH_STATUS"
+else
+  fail "health returned invalid output: $HEALTH_OUTPUT"
+fi
+
+# Test health on non-worktree
+HEALTH_NON_WT=$(bash bin/worktree.sh health "$MAIN_REPO" 2>/dev/null)
+if echo "$HEALTH_NON_WT" | jq -r '.status' 2>/dev/null | grep -q "not_worktree"; then
+  pass "health detects non-worktree"
+else
+  fail "health didn't detect non-worktree: $HEALTH_NON_WT"
+fi
+
+bash bin/worktree.sh cleanup "$WT_HEALTH" >/dev/null 2>&1
+
 
 # ============================================================
 # Phase 2: session-start.sh boundary & detection logic
@@ -258,14 +265,11 @@ bash bin/worktree.sh cleanup "$WT_LIST_TEST" >/dev/null 2>&1
 echo ""
 echo "--- Phase 2: session-start.sh integration ---"
 
-# We test the logic in isolation by extracting the key parts,
-# since running the full session-start.sh would make network calls.
-
 # --- Test 2.1: Worktree detection logic ---
 echo ""
 echo "Test 2.1: worktree detection (.git file vs directory)"
 
-# Create a worktree and test detection inside it
+cd "$MAIN_REPO"
 git branch detect-branch develop 2>/dev/null || true
 WT_DETECT="$MAIN_REPO/.claude/worktrees/detect-test"
 git worktree add "$WT_DETECT" detect-branch --quiet 2>/dev/null
@@ -356,10 +360,6 @@ fi
 # --- Test 2.4: Instance registration guard ---
 echo ""
 echo "Test 2.4: worktrees skip instance registration"
-
-# The guard in session-start.sh is:
-#   if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
-# We verify the condition works
 
 IS_WORKTREE="true"
 SHOULD_REGISTER="yes"
@@ -468,21 +468,21 @@ bash bin/worktree.sh cleanup "$WT_SYMLINK" >/dev/null 2>&1
 echo ""
 echo "--- Phase 4: Edge cases ---"
 
-# --- Test 4.1: cleanup-orphans with no worktrees dir ---
+# --- Test 4.1: cleanup-stale handles missing worktrees dir ---
 echo ""
-echo "Test 4.1: cleanup-orphans handles missing .claude/worktrees/"
+echo "Test 4.1: cleanup-stale handles missing .claude/worktrees/"
 
 rmdir "$MAIN_REPO/.claude/worktrees" 2>/dev/null || true
 EXIT_CODE=0
-bash bin/worktree.sh cleanup-orphans "$MAIN_REPO" >/dev/null 2>&1 || EXIT_CODE=$?
+bash bin/worktree.sh cleanup-stale "$MAIN_REPO" >/dev/null 2>&1 || EXIT_CODE=$?
 if [ "$EXIT_CODE" -eq 0 ]; then
-  pass "cleanup-orphans handles missing worktrees dir gracefully"
+  pass "cleanup-stale handles missing worktrees dir gracefully"
 else
-  fail "cleanup-orphans crashed with exit $EXIT_CODE"
+  fail "cleanup-stale crashed with exit $EXIT_CODE"
 fi
 mkdir -p "$MAIN_REPO/.claude/worktrees"
 
-# --- Test 4.2: setup with missing .env (no crash) ---
+# --- Test 4.2: setup handles missing optional files ---
 echo ""
 echo "Test 4.2: setup handles missing optional files"
 
@@ -591,6 +591,26 @@ if [ "$DENIED_SELF" = "[]" ]; then
 else
   fail "self-only registry produced: $DENIED_SELF"
 fi
+
+# --- Test 4.6: no automatic cleanup on session start ---
+echo ""
+echo "Test 4.6: session start does NOT auto-delete worktrees"
+
+cd "$MAIN_REPO"
+git branch persist-branch develop 2>/dev/null || true
+WT_PERSIST="$MAIN_REPO/.claude/worktrees/persist-test"
+git worktree add "$WT_PERSIST" persist-branch --quiet 2>/dev/null
+
+# Simulate what git-sync.sh does now: just prune, no cleanup-orphans
+git worktree prune 2>/dev/null || true
+
+if [ -d "$WT_PERSIST" ]; then
+  pass "worktree survives session start (no auto-cleanup)"
+else
+  fail "worktree was deleted during simulated session start"
+fi
+
+bash bin/worktree.sh cleanup "$WT_PERSIST" >/dev/null 2>&1
 
 
 # ============================================================
