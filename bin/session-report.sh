@@ -127,7 +127,8 @@ cmd_submit() {
     echo "$payload" | jq --arg ts "$ts" '. + {saved_at: $ts}' > "$fallback_file" 2>/dev/null \
       || echo "$payload" > "$fallback_file"
 
-    echo "{\"status\":\"saved_locally\",\"path\":\"$fallback_file\",\"http_code\":\"$http_code\"}" >&2
+    jq -n --arg path "$fallback_file" --arg code "$http_code" \
+      '{status: "saved_locally", path: $path, http_code: $code}' >&2
   fi
 }
 

@@ -67,7 +67,10 @@ if [[ "$PROFILE" == *"/fish/"* ]]; then
   IS_FISH=true
 fi
 
-ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude \"start\""
+# Build alias command — escape SCRIPT_DIR for safe embedding in shell alias
+# printf %q handles paths with spaces, quotes, backticks, $ etc.
+ESCAPED_DIR=$(printf '%q' "$SCRIPT_DIR")
+ALIAS_CMD="cd ${ESCAPED_DIR} && claude start"
 
 # --- Check if this directory already has an alias ---
 get_existing_alias() {
@@ -134,8 +137,10 @@ write_alias() {
   mkdir -p "$(dirname "$PROFILE")"
   echo "" >> "$PROFILE"
   if $IS_FISH; then
-    echo "alias ${name} '${ALIAS_CMD}'" >> "$PROFILE"
+    # Fish: use a function for robust path handling
+    printf '\nfunction %s\n  cd "%s"; and claude start\nend\n' "$name" "$SCRIPT_DIR" >> "$PROFILE"
   else
+    # Bash/Zsh: printf %q already escaped the path
     echo "alias ${name}='${ALIAS_CMD}'" >> "$PROFILE"
   fi
 }

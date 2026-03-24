@@ -300,7 +300,7 @@ done
 $CHECK7_CLEAN && pass "No direct API calls (using bin/ wrappers)"
 
 # ============================================================
-# CHECK 8: source .env without set -a guard
+# CHECK 8: source .env (should use grep|cut extraction instead)
 # Severity: WARN
 # ============================================================
 echo -e "  ${DIM}[8/8] Safe .env sourcing...${NC}"
@@ -311,17 +311,15 @@ for f in ${SH_FILES[@]+"${SH_FILES[@]}"}; do
   while IFS= read -r line; do
     lineno=$((lineno + 1))
     if echo "$line" | grep -qE 'source.*\.env'; then
-      if ! echo "$line" | grep -q 'set -a'; then
-        warn "source .env without set -a guard" "$fname:$lineno"
-        CHECK8_CLEAN=false
-      fi
+      warn "source .env found — use grep|cut extraction instead" "$fname:$lineno"
+      CHECK8_CLEAN=false
     fi
   done < "$f"
 done
 if [ "$SH_COUNT" -eq 0 ]; then
   pass "Safe .env sourcing (no .sh files to check)"
 else
-  $CHECK8_CLEAN && pass "Safe .env sourcing"
+  $CHECK8_CLEAN && pass "Safe .env sourcing (no source .env usage)"
 fi
 
 # ============================================================

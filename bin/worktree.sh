@@ -10,6 +10,20 @@
 
 set -o pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: worktree.sh <command> [args...]"
+  echo ""
+  echo "Worktree lifecycle management for Egregore sessions."
+  echo ""
+  echo "Commands:"
+  echo "  setup <path> <main-dir>         Set up symlinks for a new worktree"
+  echo "  cleanup <path>                  Remove a worktree"
+  echo "  cleanup-orphans <main-dir>      Clean worktrees with dead PIDs"
+  echo "  health [path]                   Check worktree + branch health"
+  echo "  list                            List all git worktrees"
+  exit 0
+fi
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 
@@ -229,7 +243,7 @@ case "$CMD" in
     # On a protected branch?
     case "$BRANCH" in
       develop|main|master)
-        echo "{\"status\":\"protected_branch\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "protected_branch", branch: $branch}'
         exit 3
         ;;
     esac
@@ -239,14 +253,14 @@ case "$CMD" in
     if ! git -C "$WT_PATH" ls-remote --heads origin "$BRANCH" 2>/dev/null | grep -q "$BRANCH"; then
       # Was it merged into develop?
       if git -C "$WT_PATH" branch -r --merged origin/develop 2>/dev/null | grep -q "origin/$BRANCH" 2>/dev/null; then
-        echo "{\"status\":\"merged\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "merged", branch: $branch}'
       else
-        echo "{\"status\":\"remote_deleted\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "remote_deleted", branch: $branch}'
       fi
       exit 2
     fi
 
-    echo "{\"status\":\"healthy\",\"branch\":\"$BRANCH\"}"
+    jq -n --arg branch "$BRANCH" '{status: "healthy", branch: $branch}'
     exit 0
     ;;
 
