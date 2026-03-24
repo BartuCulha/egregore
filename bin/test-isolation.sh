@@ -39,10 +39,11 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
   echo "Error: .env not found — need GITHUB_TOKEN and EGREGORE_API_KEY" >&2
   exit 1
 fi
-set -a; source "$SCRIPT_DIR/.env"; set +a
+# Load specific variables from .env (safe extraction, no arbitrary code execution)
+GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep '^GITHUB_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 
 API_URL="$(jq -r '.api_url // empty' "$CONFIG")"
-GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CL_API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ]; then echo "Error: api_url not set in egregore.json" >&2; exit 1; fi
