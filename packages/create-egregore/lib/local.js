@@ -104,10 +104,23 @@ async function putFileContent(token, owner, repo, filePath, content, message) {
 }
 
 async function listOrgRepos(token, owner, isOrg) {
-  const apiPath = isOrg ? `/orgs/${owner}/repos?per_page=100&sort=updated` : `/users/${owner}/repos?per_page=100&sort=updated&type=owner`;
-  const { status, data } = await ghApi("GET", apiPath, token);
-  if (status !== 200 || !Array.isArray(data)) return [];
-  return data
+  // Fetch all repos (public + private). Paginate to get beyond the first 100.
+  const baseUrl = isOrg
+    ? `/orgs/${owner}/repos?per_page=100&sort=updated&type=all`
+    : `/users/${owner}/repos?per_page=100&sort=updated&type=owner`;
+
+  let allRepos = [];
+  let page = 1;
+  while (page <= 5) { // cap at 500 repos
+    const url = `${baseUrl}&page=${page}`;
+    const { status, data } = await ghApi("GET", url, token);
+    if (status !== 200 || !Array.isArray(data) || data.length === 0) break;
+    allRepos = allRepos.concat(data);
+    if (data.length < 100) break; // last page
+    page++;
+  }
+
+  return allRepos
     .filter((r) => !r.archived && r.name !== "egregore" && r.name !== "egregore-core" && !r.name.endsWith("-memory"))
     .map((r) => ({ name: r.name, language: r.language || "", description: r.description || "" }));
 }
@@ -212,7 +225,7 @@ async function localFounderFlow(ui) {
   let orgName, description, selectedRepos = [], newProjectRepo = null;
 
   if (isNewProject) {
-    const nameInput = await ui.prompt("What's your team or project called?");
+    const nameInput = await ui.prompt("Name your Egregore (your team or group name):");
     orgName = nameInput || githubOrg;
 
     const descInput = await ui.prompt("What are you building? (one line)");
@@ -220,10 +233,10 @@ async function localFounderFlow(ui) {
 
     // Ask about project repo
     console.log("");
-    ui.info("Egregore creates its own repo for shared memory and config.");
-    ui.info("Want to also create a repo for your actual project code?");
+    ui.info("Your Egregore is set up. It has its own repo for memory and config.");
+    ui.info("If you also have a code project to work on, we can create a repo for it.");
     console.log("");
-    const projectName = await ui.prompt("Project repo name (Enter to skip):");
+    const projectName = await ui.prompt("Code project repo name (Enter to skip):");
     if (projectName) {
       newProjectRepo = projectName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     }
@@ -316,8 +329,8 @@ async function localFounderFlow(ui) {
   if (newProjectRepo) {
     // Re-prompt if name conflicts with core/memory repo
     while (newProjectRepo === repoName || newProjectRepo === memoryRepoName) {
-      ui.warn(`Your Egregore is already named "${newProjectRepo}". Pick a different name for your project repo (e.g. "${newProjectRepo}-app").`);
-      const retry = await ui.prompt("Repo name (or Enter to skip):");
+      ui.warn(`"${newProjectRepo}" is already taken by your Egregore repo. Your code project needs a different name.`);
+      const retry = await ui.prompt(`Code project name (e.g. "${newProjectRepo}-app", or Enter to skip):`);
       if (!retry) { newProjectRepo = null; break; }
       newProjectRepo = retry.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     }
