@@ -34,6 +34,12 @@ __pycache__
 .claude/commands/waitlist.md
 .claude/commands/deploy-template.md
 .claude/commands/deploy-image.md
+.claude/commands/character-v4.md
+.claude/commands/graph-diagnostic.md
+.claude/commands/graph-maintain.md
+.claude/commands/hosting.md
+.claude/commands/eval.md
+.claude/commands/eval-multiagent.md
 
 # CL-only docs (not for public repo)
 docs
