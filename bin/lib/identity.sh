@@ -128,6 +128,26 @@ if [ -z "$AUTHOR" ]; then
   HEALTH_GITHUB="fail"
 fi
 
+# --- Validate gh CLI identity matches git identity ---
+# The gh CLI has its own auth (keyring) separate from .env GITHUB_TOKEN.
+# If they diverge, PRs get created under the wrong account.
+if command -v gh &>/dev/null; then
+  GH_CLI_USER=$(gh api user --jq '.login' 2>/dev/null || true)
+  if [ -n "$GH_CLI_USER" ] && [ -n "$AUTHOR" ] && [ "$AUTHOR" != "unknown" ]; then
+    AUTHOR_LC=$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')
+    GH_CLI_LC=$(echo "$GH_CLI_USER" | tr '[:upper:]' '[:lower:]')
+    if [ "$AUTHOR_LC" != "$GH_CLI_LC" ]; then
+      echo ""
+      echo "WARNING: Identity mismatch detected."
+      echo "  Git identity (.env):  $AUTHOR"
+      echo "  gh CLI (active):      $GH_CLI_USER"
+      echo "  PRs will be created as '$GH_CLI_USER', not '$AUTHOR'."
+      echo "  Fix: gh auth switch --user $AUTHOR"
+      echo ""
+    fi
+  fi
+fi
+
 # --- Export telemetry identity env vars ---
 export EGREGORE_USER="$AUTHOR"
 export EGREGORE_ORG="$(jq -r '.slug // .github_org // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null || true)"

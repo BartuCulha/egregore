@@ -186,6 +186,34 @@ if [ "$IS_WORKTREE" = "true" ]; then
   # Inside a worktree — skip develop checkout, we're already on our branch
   BRANCH=$(git branch --show-current 2>/dev/null || echo "?")
   DEVELOP_SYNCED="true"
+
+  # --- Worktree branch health check ---
+  # Detect if the branch was already merged into develop (e.g., PR merged
+  # but worktree not cleaned up). This prevents working on a stale branch
+  # whose commits are already in develop.
+  WORKTREE_STALE="false"
+  if [ "$BRANCH" != "?" ] && [ "$BRANCH" != "develop" ] && [ "$BRANCH" != "main" ]; then
+    # Check if remote branch still exists
+    if ! git ls-remote --heads origin "$BRANCH" 2>/dev/null | grep -q "$BRANCH"; then
+      # Remote branch gone — check if it was merged into develop
+      if git branch -r --merged origin/develop 2>/dev/null | grep -q "origin/$BRANCH" 2>/dev/null || \
+         git merge-base --is-ancestor HEAD origin/develop 2>/dev/null; then
+        WORKTREE_STALE="merged"
+      else
+        WORKTREE_STALE="remote_deleted"
+      fi
+    fi
+  fi
+
+  if [ "$WORKTREE_STALE" != "false" ]; then
+    echo ""
+    echo "WARNING: Branch '$BRANCH' was already merged into develop."
+    echo "This worktree is stale — your work here is already in develop."
+    echo "Start a new session in the main project to get a fresh branch."
+    echo ""
+    HEALTH_GIT="fail"
+  fi
+
   # Use main project's .env and state if ours are missing
   if [ ! -f "$SCRIPT_DIR/.env" ] && [ -f "$MAIN_PROJECT_DIR/.env" ]; then
     export ENV_FILE="$MAIN_PROJECT_DIR/.env"

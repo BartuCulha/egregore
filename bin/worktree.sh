@@ -180,33 +180,52 @@ case "$CMD" in
     for WT_DIR in "$WT_BASE"/*/; do
       [ -d "$WT_DIR" ] || continue
 
-      # Safety: skip worktrees younger than MIN_AGE
+      # Check if the worktree's branch was already merged into develop.
+      # Merged worktrees are stale regardless of age — clean them if no active session.
+      WT_BRANCH=""
+      WT_MERGED="false"
+      if [ -f "$WT_DIR/.git" ]; then
+        WT_BRANCH=$(git -C "$WT_DIR" branch --show-current 2>/dev/null || echo "")
+        if [ -n "$WT_BRANCH" ] && [ "$WT_BRANCH" != "develop" ] && [ "$WT_BRANCH" != "main" ]; then
+          if git merge-base --is-ancestor "$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null)" \
+               "$(git -C "$MAIN_DIR" rev-parse origin/develop 2>/dev/null)" 2>/dev/null; then
+            WT_MERGED="true"
+          fi
+        fi
+      fi
+
+      PID_FILE="$WT_DIR/.egregore-worktree-pid"
+      PID_ALIVE="false"
+      if [ -f "$PID_FILE" ]; then
+        STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
+          PID_ALIVE="true"
+        fi
+      fi
+
+      # Skip worktrees with active sessions (regardless of merge status)
+      if [ "$PID_ALIVE" = "true" ] || has_active_session "$WT_DIR" 2>/dev/null; then
+        continue
+      fi
+
+      # Clean merged worktrees immediately (no age check)
+      if [ "$WT_MERGED" = "true" ]; then
+        bash "$0" cleanup "$WT_DIR" 2>/dev/null || true
+        CLEANED=$((CLEANED + 1))
+        continue
+      fi
+
+      # For non-merged worktrees, enforce age check
       WT_MTIME=$(stat -f %m "$WT_DIR" 2>/dev/null || stat -c %Y "$WT_DIR" 2>/dev/null || echo "$NOW_TS")
       WT_AGE=$((NOW_TS - WT_MTIME))
       if [ "$WT_AGE" -lt "$MIN_AGE" ] 2>/dev/null; then
         continue
       fi
 
-      PID_FILE="$WT_DIR/.egregore-worktree-pid"
-
-      if [ -f "$PID_FILE" ]; then
-        STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
-        if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
-          continue  # PID alive — skip
-        fi
-        # PID is dead — but double-check no active session has CWD here
-        if has_active_session "$WT_DIR"; then
-          continue  # Active session detected — skip
-        fi
-        # Safe to clean
+      if [ -f "$PID_FILE" ] || [ ! -f "$WT_DIR/.git" ]; then
+        # Dead PID or no .git — safe to clean
         bash "$0" cleanup "$WT_DIR" 2>/dev/null || true
         CLEANED=$((CLEANED + 1))
-      else
-        # No PID file — only clean if truly stale (no .git file AND old)
-        if [ ! -f "$WT_DIR/.git" ]; then
-          rm -rf "$WT_DIR" 2>/dev/null || true
-          CLEANED=$((CLEANED + 1))
-        fi
       fi
     done
 
