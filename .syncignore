@@ -87,6 +87,8 @@ bin/transcript-backfill.sh
 bin/seeds
 DEV.md
 TELEGRAM_BOT_PLAN.md
+start.command
+start.sh
 
 # Org-specific identity
 egregore.md
