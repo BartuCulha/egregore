@@ -214,7 +214,11 @@ if [ "$LOCAL_MODE" = "true" ]; then
   if [ "$HAS_FAILURE" = "true" ]; then
     echo "  ⚠${FAILED_SERVICES} — run /checkup"
   else
-    FOOTER_LEFT="  ✓ ready"
+    if [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
+      FOOTER_LEFT="  ◆ updated"
+    else
+      FOOTER_LEFT="  ✓ ready"
+    fi
 
     # Add managed repos inline
     if [ -n "$REPOS_STATUS" ]; then
