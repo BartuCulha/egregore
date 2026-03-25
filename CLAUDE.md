@@ -122,7 +122,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
 **Connectors** — `/telegram-connect` (Telegram group setup)
-**Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
+**Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr` `/contribute`
 **Spirits** — `/summon` (persistent agent processes)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
@@ -137,6 +137,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Identity: `/me` — "who am I", "call me oz"
 - People: `/invite` (add) · `/delete-user` (remove)
 - PRs: `/pr` (create) · `/review-pr` (review)
+- Contributing: `/contribute` (upstream framework) · `/save` (org repo) · `/issue` (report bug)
 - Agents: `/summon` (design through questions) · `/loop` (quick recurring schedule)
 - Announcements: `/announce` (broadcast to group) · `/handoff` (structured to a person) · `bin/notify.sh send` (DM one person)
 
