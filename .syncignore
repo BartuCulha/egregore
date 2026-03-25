@@ -8,6 +8,7 @@
 .env
 .env.local
 .env 2
+.env 2.example
 .DS_Store
 .egregore-state.json
 .egregore-session-id
@@ -34,6 +35,13 @@ __pycache__
 .claude/commands/waitlist.md
 .claude/commands/deploy-template.md
 .claude/commands/deploy-image.md
+.claude/commands/connect.md
+.claude/commands/character-v4.md
+.claude/commands/graph-diagnostic.md
+.claude/commands/graph-maintain.md
+.claude/commands/hosting.md
+.claude/commands/eval.md
+.claude/commands/eval-multiagent.md
 
 # CL-only docs (not for public repo)
 docs
