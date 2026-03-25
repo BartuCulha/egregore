@@ -11,16 +11,19 @@ Also triggered by `/release` after merging develop → main.
 
 ## How it works
 
+Two push targets with different git lineages:
+
 ```
 curve-labs-core (develop/main)
-    ↓ rsync through .syncignore → public branch worktree
-    ↓ safety review (3 checkpoints)
-    ↓ commit with real message
-    ↓ git push to remotes
-egregore-core / egregore-labs/egregore
+    ↓ rsync through .syncignore
+    ├─→ public branch worktree → git push upstream public:main → Curve-Labs/egregore-core
+    └─→ ../egregore-oss/       → git push origin main          → egregore-labs/egregore
 ```
 
-The `public` branch lives in curve-labs-core. It tracks egregore-core's history (compatible for push). Content is filtered through `.syncignore` on every sync.
+- **egregore-core**: Uses the `public` branch (shares git history with egregore-core).
+- **egregore-labs/egregore**: Uses the `../egregore-oss/` clone (has curated 8-commit history). NEVER force-push or replace this lineage.
+
+Both get the same filtered content. Same `.syncignore`. Same safety checkpoints.
 
 ## CRITICAL: This is the last gate before code goes public
 
@@ -47,16 +50,17 @@ if ! git show-ref --verify --quiet refs/heads/public 2>/dev/null; then
   exit 1
 fi
 
-# Verify at least one push target
-REMOTES=""
-git remote get-url upstream &>/dev/null && REMOTES="$REMOTES upstream"
-git remote get-url oss &>/dev/null && REMOTES="$REMOTES oss"
-if [ -z "$REMOTES" ]; then
-  echo "Error: no push targets. Add remotes:"
+# Verify upstream remote exists (for egregore-core)
+if ! git remote get-url upstream &>/dev/null; then
+  echo "Error: upstream remote not found. Add it:"
   echo "  git remote add upstream git@github.com:Curve-Labs/egregore-core.git"
-  echo "  git remote add oss git@github.com:egregore-labs/egregore.git"
   exit 1
 fi
+
+# Check if egregore-oss clone exists (for egregore-labs/egregore)
+OSS_CLONE="$(cd "$REPO_ROOT/.." && pwd)/egregore-oss"
+OSS_AVAILABLE="false"
+[ -d "$OSS_CLONE/.git" ] && OSS_AVAILABLE="true"
 ```
 
 ## Step 1: Create temporary worktree for public branch
@@ -96,12 +100,22 @@ eval rsync -a --delete $EXCLUDE_FLAGS "$REPO_ROOT/" "$PUBLIC_WT/"
 # rsync --delete skips excluded files — if a file existed before being added to
 # .syncignore, it stays in the destination. We remove those manually.
 # CRITICAL: skip .git — deleting it breaks the worktree.
+# CRITICAL: must cd into the directory first so glob patterns like
+# bin/test-*.sh and *.png expand correctly against the actual files.
 cd "$PUBLIC_WT"
 for pattern in "${EXCLUDED_PATTERNS[@]}"; do
   case "$pattern" in .git|.git/) continue ;; esac
-  for f in $pattern; do
-    [ -e "$f" ] && rm -rf "$f"
-  done
+  # Use find for patterns with wildcards, direct check for exact paths
+  case "$pattern" in
+    *\**|*\?*)
+      # Wildcard pattern — use find to match
+      find . -path "./$pattern" -exec rm -rf {} + 2>/dev/null || true
+      ;;
+    *)
+      # Exact path
+      [ -e "$pattern" ] && rm -rf "$pattern"
+      ;;
+  esac
 done
 
 # Clean up runtime artifacts
@@ -262,19 +276,41 @@ options:
 
 ## Step 7: Commit and push
 
+### 7a: egregore-core (public branch)
+
 ```bash
 cd "$PUBLIC_WT"
 git commit -m "$COMMIT_MESSAGE"
+git push upstream public:main --quiet && echo "  ✓ Pushed to Curve-Labs/egregore-core"
+```
 
-# Push to each configured remote
-if git remote get-url upstream &>/dev/null; then
-  git push upstream public:main --quiet && echo "  ✓ Pushed to Curve-Labs/egregore-core"
-fi
+### 7b: egregore-labs/egregore (separate clone)
 
-if git remote get-url oss &>/dev/null; then
-  git push oss public:main --quiet && echo "  ✓ Pushed to egregore-labs/egregore"
+The new OSS repo has a different git lineage (curated 8-commit history). NEVER push the public branch there — it would overwrite the curated history.
+
+Instead, sync the same filtered content to `../egregore-oss/`:
+
+```bash
+OSS_CLONE="$REPO_ROOT/../egregore-oss"
+if [ -d "$OSS_CLONE/.git" ]; then
+  # Copy filtered content (same as what's in the public worktree)
+  find "$OSS_CLONE" -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} \;
+  # Copy from public worktree (already filtered and cleaned)
+  cd "$PUBLIC_WT"
+  find . -mindepth 1 -maxdepth 1 -not -name '.git' -exec cp -a {} "$OSS_CLONE/" \;
+
+  cd "$OSS_CLONE"
+  git add -A
+  if ! git diff --cached --quiet 2>/dev/null; then
+    git commit -m "$COMMIT_MESSAGE"
+    git push origin main --quiet && echo "  ✓ Pushed to egregore-labs/egregore"
+  else
+    echo "  ✓ egregore-labs/egregore already up to date"
+  fi
 fi
 ```
+
+If `../egregore-oss/` doesn't exist, skip silently — egregore-core push still succeeds.
 
 ## Step 8: Clean up worktree
 
@@ -340,6 +376,7 @@ Dry run — would change:
 - **`.syncignore` is the single source of truth** for what gets excluded
 - **Never commit generic "Sync from" messages** — use real descriptions
 - **Safety scan runs every time** — it catches things .syncignore doesn't (hardcoded strings, internal refs)
-- **The `public` branch lives in curve-labs-core** — do not delete it
-- **Remotes**: `upstream` = Curve-Labs/egregore-core, `oss` = egregore-labs/egregore
+- **The `public` branch lives in curve-labs-core** — do not delete it. Used for egregore-core only.
+- **`../egregore-oss/`** is the clone for egregore-labs/egregore — different git lineage, NEVER force-push or replace its history
+- **Two push targets, same content**: egregore-core via public branch, egregore-labs/egregore via clone
 - **If in doubt, cancel** — you can always re-run after investigating
