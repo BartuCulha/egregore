@@ -50,7 +50,8 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 if [ "$ONBOARDING_COMPLETE" != "true" ]; then
-  jq -n --arg author "$AUTHOR" '{onboarding_complete: false, author: $author}'
+  # Output as a single compact line — Claude reads it, user doesn't need to see it
+  echo "onboarding_needed author=$AUTHOR"
   exit 0
 fi
 
