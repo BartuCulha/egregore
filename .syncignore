@@ -71,7 +71,21 @@ api
 ascii-oracle
 blog
 telegram-bot
-tests
+# Tests — exclude internal, keep OSS-safe ones
+tests/conftest.py
+tests/pyproject.toml
+tests/uv.lock
+tests/utils
+tests/run-all.sh
+tests/legacy_*
+tests/backfill_*
+tests/test_*.py
+tests/test-graph-op.sh
+tests/test-session-start-provision.sh
+tests/test-setup-https.sh
+tests/test-test-changes.sh
+tests/test_setup_flow.sh
+tests/test_multi_repo.sh
 data
 packages
 skills/cl-admin
