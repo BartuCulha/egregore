@@ -26,7 +26,7 @@ from .auth import (
     USE_SUPABASE,
 )
 from .models import (
-    GraphQuery, GraphBatch, NotifySend, NotifyGroup, OrgRegister,
+    GraphQuery, GraphBatch, NotifySend, NotifyGroup, NotifyRelay, OrgRegister,
     OrgSetup, OrgJoin, OrgTelegram, GitHubCallback, SetupOrgsResponse,
     OrgInvite, OrgAcceptInvite, UserEnsure, UserProfileUpdate,
     WaitlistAdd, WaitlistApprove, HealthCheckin, RemoveMemberResponse,
@@ -34,7 +34,7 @@ from .models import (
     GoogleOAuthCallback, GooglePromote, ScribeSummarize, PulseSynthesize, PulseReport,
 )
 from .services.graph import execute_query, execute_batch, execute_system_query, get_schema, test_connection
-from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link
+from .services.notify import send_message, send_group, test_notify, generate_bot_invite_link, create_group_invite_link, _send_telegram
 from .services import github as gh
 from .services.tokens import create_token, claim_token, create_invite_token, peek_token
 
@@ -226,6 +226,69 @@ async def notify_test(org: dict = Depends(validate_api_key)):
     result = await test_notify(org)
     if result["status"] != "ok":
         raise HTTPException(status_code=503, detail=result.get("detail"))
+    return result
+
+
+# =============================================================================
+# PUBLIC RELAY — group messages for local-mode egregores (no API key needed)
+# =============================================================================
+
+# In-memory rate limiter: max 10 messages per group per hour
+_relay_limits: dict = {}
+
+@app.post("/api/notify/relay")
+async def notify_relay(body: NotifyRelay):
+    """Public relay for local-mode group messages. No API key required.
+    Rate limited: 10 messages per group per hour."""
+    import time
+
+    # Rate limit by group_link
+    now = time.time()
+    key = body.group_link
+    if key in _relay_limits:
+        timestamps = [t for t in _relay_limits[key] if now - t < 3600]
+        if len(timestamps) >= 10:
+            raise HTTPException(status_code=429, detail="Rate limit: max 10 messages per group per hour")
+        timestamps.append(now)
+        _relay_limits[key] = timestamps
+    else:
+        _relay_limits[key] = [now]
+
+    # Resolve group_link to chat_id via bot
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        raise HTTPException(status_code=503, detail="Telegram bot not configured")
+
+    # Try to get chat info from the invite link
+    # The bot must already be a member of the group (added during /telegram-connect)
+    # We look up the chat_id from our known groups in Supabase or Neo4j
+    # For now: search Neo4j for orgs with matching telegram_group_link
+    from services.graph import execute_query
+    result = await execute_query(
+        "MATCH (o:Org) WHERE o.telegram_group_link = $link RETURN o.telegram_chat_id AS chat_id LIMIT 1",
+        {"link": body.group_link}
+    )
+    chat_id = None
+    if result and result.get("values") and len(result["values"]) > 0:
+        chat_id = result["values"][0][0]
+
+    if not chat_id:
+        # Fallback: check all org configs for matching group link
+        from auth import ORG_CONFIGS
+        for org_slug, org_config in ORG_CONFIGS.items():
+            if org_config.get("telegram_group_link") == body.group_link:
+                chat_id = org_config.get("telegram_chat_id")
+                break
+
+    if not chat_id:
+        raise HTTPException(status_code=404, detail="Group not found. Ensure the bot is added to the group and /telegram-connect was run.")
+
+    # Send the message
+    prefix = f"[{body.org_name}] " if body.org_name else ""
+    result = await _send_telegram(bot_token, chat_id, f"{prefix}{body.message}")
+
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result.get("detail"))
     return result
 
 
