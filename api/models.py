@@ -20,6 +20,14 @@ class NotifyGroup(BaseModel):
     message: str
 
 
+class NotifyRelay(BaseModel):
+    """Public relay for local-mode group messages. No API key required."""
+    group_link: str = Field(..., max_length=200)
+    message: str = Field(..., max_length=2000)
+    slug: Optional[str] = None
+    org_name: Optional[str] = None
+
+
 class OrgRegister(BaseModel):
     org_name: str
     github_org: str
