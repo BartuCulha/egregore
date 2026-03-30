@@ -13,9 +13,13 @@ logger = logging.getLogger(__name__)
 # Safety switch: set USE_SUPABASE=true to read from Supabase, false for Neo4j fallback
 USE_SUPABASE = os.environ.get("USE_SUPABASE", "false").lower() == "true"
 
-# GitHub OAuth App
+# GitHub OAuth App (legacy — kept for backward compat with existing tokens)
 GITHUB_CLIENT_ID = "Ov23lizB4nYEeIRsHTdb"
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+
+# GitHub App (new — minimal consent screen)
+GITHUB_APP_CLIENT_ID = os.environ.get("GITHUB_APP_CLIENT_ID", "Iv23li2obNsAjakoK2RE")
+GITHUB_APP_CLIENT_SECRET = os.environ.get("GITHUB_APP_CLIENT_SECRET", "")
 
 
 # Org configs loaded from ORG_CONFIGS env var (JSON) or individual env vars.
@@ -449,18 +453,15 @@ async def validate_github_token(authorization: str = Header(...)) -> str:
     return resp.json().get("login", "")
 
 
-async def exchange_github_code(code: str) -> str:
-    """Exchange OAuth authorization code for access token."""
-    if not GITHUB_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="GitHub OAuth not configured (missing client secret)")
-
+async def _try_exchange(client_id: str, client_secret: str, code: str) -> str | None:
+    """Attempt to exchange an OAuth code with a specific client. Returns token or None."""
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://github.com/login/oauth/access_token",
             headers={"Accept": "application/json"},
             data={
-                "client_id": GITHUB_CLIENT_ID,
-                "client_secret": GITHUB_CLIENT_SECRET,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "code": code,
             },
             timeout=10.0,
@@ -472,10 +473,31 @@ async def exchange_github_code(code: str) -> str:
     try:
         data = resp.json()
     except Exception:
-        raise HTTPException(status_code=502, detail="GitHub returned an invalid response. Try again in a moment.")
+        return None
 
-    token = data.get("access_token")
-    if not token:
-        error = data.get("error_description", data.get("error", "Unknown error"))
-        raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {error}")
-    return token
+    return data.get("access_token")
+
+
+async def exchange_github_code(code: str) -> str:
+    """Exchange OAuth authorization code for access token.
+
+    Tries both the GitHub App and legacy OAuth App credentials.
+    The code is tied to whichever client ID initiated the flow, so we
+    try both to handle cached frontends that still use the old client ID.
+    """
+    # Build list of credential pairs to try
+    attempts = []
+    if GITHUB_APP_CLIENT_SECRET:
+        attempts.append((GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET))
+    if GITHUB_CLIENT_SECRET:
+        attempts.append((GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET))
+
+    if not attempts:
+        raise HTTPException(status_code=500, detail="GitHub OAuth not configured (missing client secret)")
+
+    for client_id, client_secret in attempts:
+        token = await _try_exchange(client_id, client_secret, code)
+        if token:
+            return token
+
+    raise HTTPException(status_code=400, detail="GitHub OAuth failed: invalid or expired authorization code")
