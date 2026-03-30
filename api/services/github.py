@@ -21,6 +21,23 @@ def _headers(token: str) -> dict:
     }
 
 
+async def _resolve_token(user_token: str, github_org: str) -> str:
+    """Return the best token for repo operations.
+
+    If a GitHub App installation exists for this org, use the installation token.
+    Falls back to user_token (backward compat for orgs without the App installed).
+    """
+    try:
+        from .github_app import is_configured, get_token_for_org
+        if is_configured():
+            app_token = await get_token_for_org(github_org)
+            if app_token:
+                return app_token
+    except Exception as e:
+        logger.debug(f"GitHub App token resolution failed, using user token: {e}")
+    return user_token
+
+
 async def get_user(token: str) -> dict:
     """Get authenticated user info."""
     async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -62,10 +79,11 @@ async def get_org_membership(token: str, org: str) -> str:
 
 async def repo_exists(token: str, owner: str, repo: str) -> bool:
     """Check if a repo exists and is accessible."""
+    effective = await _resolve_token(token, owner)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/repos/{owner}/{repo}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     return resp.status_code == 200
@@ -73,6 +91,7 @@ async def repo_exists(token: str, owner: str, repo: str) -> bool:
 
 async def fork_repo(token: str, target_org: str | None = None) -> dict:
     """Fork egregore-core into target org (or personal account if None)."""
+    effective = await _resolve_token(token, target_org or "")
     body = {}
     if target_org:
         body["organization"] = target_org
@@ -80,7 +99,7 @@ async def fork_repo(token: str, target_org: str | None = None) -> dict:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.post(
             f"{API_BASE}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/forks",
-            headers=_headers(token),
+            headers=_headers(effective),
             json=body,
             timeout=30.0,
         )
@@ -97,6 +116,7 @@ async def generate_from_template(
     Uses POST /repos/{template_owner}/{template_repo}/generate.
     Requires egregore-core to be marked as a template repo on GitHub.
     """
+    effective = await _resolve_token(token, owner)
     body = {
         "owner": owner,
         "name": repo_name,
@@ -106,7 +126,7 @@ async def generate_from_template(
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.post(
             f"{API_BASE}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/generate",
-            headers=_headers(token),
+            headers=_headers(effective),
             json=body,
             timeout=30.0,
         )
@@ -117,10 +137,11 @@ async def generate_from_template(
 
 async def rename_repo(token: str, owner: str, old_name: str, new_name: str) -> dict:
     """Rename a repository. Returns updated repo data."""
+    effective = await _resolve_token(token, owner)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.patch(
             f"{API_BASE}/repos/{owner}/{old_name}",
-            headers=_headers(token),
+            headers=_headers(effective),
             json={"name": new_name},
             timeout=15.0,
         )
@@ -151,6 +172,7 @@ async def wait_for_repo(token: str, owner: str, repo_name: str, timeout: int = 3
 
 async def create_repo(token: str, name: str, org: str | None = None, private: bool = True) -> dict:
     """Create a new repository."""
+    effective = await _resolve_token(token, org or "")
     if org:
         url = f"{API_BASE}/orgs/{org}/repos"
     else:
@@ -164,7 +186,7 @@ async def create_repo(token: str, name: str, org: str | None = None, private: bo
     }
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        resp = await client.post(url, headers=_headers(token), json=body, timeout=15.0)
+        resp = await client.post(url, headers=_headers(effective), json=body, timeout=15.0)
     if resp.status_code not in (200, 201):
         raise ValueError(f"Create repo failed: {resp.status_code} {resp.text}")
     return resp.json()
@@ -172,19 +194,20 @@ async def create_repo(token: str, name: str, org: str | None = None, private: bo
 
 async def update_file(token: str, owner: str, repo: str, path: str, content: str, message: str) -> dict:
     """Create or update a file via the Contents API."""
+    effective = await _resolve_token(token, owner)
     encoded = base64.b64encode(content.encode()).decode()
     url = f"{API_BASE}/repos/{owner}/{repo}/contents/{path}"
 
     # Check if file exists to get its SHA (needed for updates)
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        existing = await client.get(url, headers=_headers(token), timeout=10.0)
+        existing = await client.get(url, headers=_headers(effective), timeout=10.0)
 
     body = {"message": message, "content": encoded}
     if existing.status_code == 200:
         body["sha"] = existing.json()["sha"]
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        resp = await client.put(url, headers=_headers(token), json=body, timeout=15.0)
+        resp = await client.put(url, headers=_headers(effective), json=body, timeout=15.0)
     if resp.status_code not in (200, 201):
         raise ValueError(f"Update file failed: {resp.status_code} {resp.text}")
     return resp.json()
@@ -215,6 +238,7 @@ async def list_org_repos(token: str, org: str) -> list[dict]:
     Returns [{name, description, language, private}].
     Uses /user/repos for personal accounts (includes private repos).
     """
+    effective = await _resolve_token(token, org)
     repos: list[dict] = []
     page = 1
     is_personal = False
@@ -225,7 +249,7 @@ async def list_org_repos(token: str, org: str) -> list[dict]:
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(
                     f"{API_BASE}/user/repos",
-                    headers=_headers(token),
+                    headers=_headers(effective),
                     params={"per_page": 100, "sort": "updated", "page": page, "affiliation": "owner"},
                     timeout=15.0,
                 )
@@ -233,7 +257,7 @@ async def list_org_repos(token: str, org: str) -> list[dict]:
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(
                     f"{API_BASE}/orgs/{org}/repos",
-                    headers=_headers(token),
+                    headers=_headers(effective),
                     params={"per_page": 100, "sort": "updated", "page": page, "type": "all"},
                     timeout=15.0,
                 )
@@ -296,10 +320,11 @@ async def update_egregore_json(
 
 async def check_collaborator(token: str, owner: str, repo: str, username: str) -> bool:
     """Check if a user is a collaborator on a repo."""
+    effective = await _resolve_token(token, owner)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/repos/{owner}/{repo}/collaborators/{username}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     return resp.status_code == 204
@@ -313,6 +338,7 @@ async def list_egregore_instances(token: str, org: str) -> list[dict]:
     """
     import json as _json
 
+    effective = await _resolve_token(token, org)
     instances: list[dict] = []
     page = 1
     egregore_repos: list[str] = []
@@ -321,7 +347,7 @@ async def list_egregore_instances(token: str, org: str) -> list[dict]:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(
                 f"{API_BASE}/orgs/{org}/repos",
-                headers=_headers(token),
+                headers=_headers(effective),
                 params={"per_page": 100, "sort": "updated", "page": page},
                 timeout=15.0,
             )
@@ -331,7 +357,7 @@ async def list_egregore_instances(token: str, org: str) -> list[dict]:
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(
                     f"{API_BASE}/user/repos",
-                    headers=_headers(token),
+                    headers=_headers(effective),
                     params={"per_page": 100, "sort": "updated", "page": page, "affiliation": "owner"},
                     timeout=15.0,
                 )
@@ -371,10 +397,11 @@ async def list_egregore_instances(token: str, org: str) -> list[dict]:
 
 async def get_file_content(token: str, owner: str, repo: str, path: str) -> str | None:
     """Get file content from a repo."""
+    effective = await _resolve_token(token, owner)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/repos/{owner}/{repo}/contents/{path}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     if resp.status_code != 200:
@@ -385,12 +412,13 @@ async def get_file_content(token: str, owner: str, repo: str, path: str) -> str 
 
 
 async def invite_to_org(token: str, org: str, username: str) -> dict:
-    """Send a GitHub org invitation. Requires admin:org scope + org owner/admin role.
+    """Send a GitHub org invitation. Uses installation token when available.
     Returns {"status": "invited"} or {"status": "failed", "reason": "..."}."""
+    effective = await _resolve_token(token, org)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.put(
             f"{API_BASE}/orgs/{org}/memberships/{username}",
-            headers=_headers(token),
+            headers=_headers(effective),
             json={"role": "member"},
             timeout=15.0,
         )
@@ -409,10 +437,11 @@ async def invite_to_org(token: str, org: str, username: str) -> dict:
 
 async def check_org_membership(token: str, org: str, username: str) -> str:
     """Check a user's org membership state. Returns 'active', 'pending', or 'none'."""
+    effective = await _resolve_token(token, org)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/orgs/{org}/memberships/{username}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     if resp.status_code == 200:
@@ -423,11 +452,12 @@ async def check_org_membership(token: str, org: str, username: str) -> str:
 async def add_repo_collaborator(token: str, owner: str, repo: str, username: str, retries: int = 2) -> bool:
     """Add a user as a collaborator to a repo. Retries on failure. Returns True if successful."""
     import asyncio
+    effective = await _resolve_token(token, owner)
     for attempt in range(1, retries + 1):
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.put(
                 f"{API_BASE}/repos/{owner}/{repo}/collaborators/{username}",
-                headers=_headers(token),
+                headers=_headers(effective),
                 json={"permission": "push"},
                 timeout=10.0,
             )
@@ -444,10 +474,11 @@ async def add_repo_collaborator(token: str, owner: str, repo: str, username: str
 
 async def remove_repo_collaborator(token: str, owner: str, repo: str, username: str) -> bool:
     """Remove a user as a collaborator from a repo. Returns True if successful (or already removed)."""
+    effective = await _resolve_token(token, owner)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.delete(
             f"{API_BASE}/repos/{owner}/{repo}/collaborators/{username}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     if resp.status_code in (204, 404):
@@ -504,11 +535,12 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
 
     Returns True if successful (or branch doesn't exist), False on error.
     """
+    effective = await _resolve_token(token, owner)
     # Get main's SHA
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/repos/{owner}/{repo}/git/ref/heads/main",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     if resp.status_code != 200:
@@ -519,7 +551,7 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/repos/{owner}/{repo}/git/ref/heads/{branch}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     if resp.status_code == 404:
@@ -527,7 +559,7 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.post(
                 f"{API_BASE}/repos/{owner}/{repo}/git/refs",
-                headers=_headers(token),
+                headers=_headers(effective),
                 json={"ref": f"refs/heads/{branch}", "sha": main_sha},
                 timeout=10.0,
             )
@@ -537,7 +569,7 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.patch(
             f"{API_BASE}/repos/{owner}/{repo}/git/refs/heads/{branch}",
-            headers=_headers(token),
+            headers=_headers(effective),
             json={"sha": main_sha, "force": True},
             timeout=10.0,
         )
@@ -546,10 +578,11 @@ async def sync_branch_to_main(token: str, owner: str, repo: str, branch: str = "
 
 async def is_org(token: str, name: str) -> bool:
     """Check if a GitHub name is an org (True) or a user (False)."""
+    effective = await _resolve_token(token, name)
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
             f"{API_BASE}/orgs/{name}",
-            headers=_headers(token),
+            headers=_headers(effective),
             timeout=10.0,
         )
     return resp.status_code == 200

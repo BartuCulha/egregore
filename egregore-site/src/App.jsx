@@ -37,7 +37,7 @@ function Login() {
   }, [])
 
   const loginUrl = clientId
-    ? `https://github.com/login/oauth/authorize?client_id=${clientId}&scope=repo,read:org`
+    ? `https://github.com/login/oauth/authorize?client_id=${clientId}`
     : null
 
   return (
