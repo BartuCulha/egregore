@@ -5,8 +5,8 @@
 
 const https = require("node:https");
 
-const CLIENT_ID = "Ov23liYZjJbbbNgnJ9vH";
-const SCOPE = "repo,read:org";
+const CLIENT_ID = "Iv23li2obNsAjakoK2RE";
+const SCOPE = "";  // GitHub App — permissions managed via installation, not OAuth scope
 
 function post(url, body) {
   return new Promise((resolve, reject) => {

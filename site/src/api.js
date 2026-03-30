@@ -1,10 +1,12 @@
 const API_URL = import.meta.env.VITE_API_URL || "https://egregore-production-55f2.up.railway.app";
-const GITHUB_CLIENT_ID = "Ov23lizB4nYEeIRsHTdb";
-const GITHUB_SCOPE = "repo,read:org";
+const GITHUB_CLIENT_ID = "Iv23li2obNsAjakoK2RE";
+const GITHUB_SCOPE = "";  // GitHub App — permissions managed via installation, not OAuth scope
 
 export function getGitHubAuthUrl() {
   const redirectUri = `${window.location.origin}/callback`;
-  return `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=${GITHUB_SCOPE}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  let url = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  if (GITHUB_SCOPE) url += `&scope=${GITHUB_SCOPE}`;
+  return url;
 }
 
 async function request(method, path, { body, token } = {}) {
@@ -45,6 +47,10 @@ export async function joinOrg(token, { github_org, repo_name = "egregore-core" }
     token,
     body: { github_org, repo_name },
   });
+}
+
+export async function checkAppInstallation(githubOrg) {
+  return request("GET", `/api/github-app/installation/${encodeURIComponent(githubOrg)}`);
 }
 
 export async function getTelegramStatus(slug) {
