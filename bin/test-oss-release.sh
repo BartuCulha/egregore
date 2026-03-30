@@ -46,7 +46,7 @@ echo "2. Internal reference check"
 # These are legitimate public defaults (OAuth Client ID is public by design, upstream is the OSS repo).
 # Check that they appear WITH a config override mechanism (not as bare hardcoded values).
 CONFIGURABLE_DEFAULTS=(
-  "Iv23li2obNsAjakoK2RE"    # GitHub App Client ID — must have config override nearby
+  "Ov23lizB4nYEeIRsHTdb"    # OAuth Client ID — must have config override nearby
   "Curve-Labs/egregore-core" # Upstream URL — must have config override nearby
 )
 
