@@ -52,7 +52,7 @@ def _generate_jwt() -> str:
     payload = {
         "iat": now - 60,  # Clock skew tolerance
         "exp": now + (10 * 60),  # 10 minutes
-        "iss": int(GITHUB_APP_ID),
+        "iss": GITHUB_APP_ID,
     }
     pem = _load_private_key()
     return jwt.encode(payload, pem, algorithm="RS256")
