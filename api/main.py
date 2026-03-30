@@ -22,7 +22,8 @@ from .auth import (
     validate_api_key, validate_admin_github_token, validate_github_token,
     generate_api_key,
     reload_configs, ORG_CONFIGS, ADMIN_USERS,
-    load_orgs_from_neo4j, load_orgs, exchange_github_code, GITHUB_CLIENT_ID,
+    load_orgs_from_neo4j, load_orgs, exchange_github_code,
+    GITHUB_CLIENT_ID, GITHUB_APP_CLIENT_ID,
     USE_SUPABASE,
 )
 from .models import (
@@ -489,10 +490,23 @@ async def org_status(org: dict = Depends(validate_api_key)):
 
 @app.post("/api/auth/github/callback")
 async def github_callback(body: GitHubCallback):
-    """Exchange GitHub OAuth code for access token."""
+    """Exchange GitHub OAuth code for access token (uses GitHub App when configured)."""
     token = await exchange_github_code(body.code)
     user = await gh.get_user(token)
     return {"github_token": token, "user": user}
+
+
+@app.get("/api/github-app/installation/{github_org}")
+async def github_app_installation(github_org: str):
+    """Check if the GitHub App is installed on an org. Returns install URL if not."""
+    try:
+        from .services.github_app import is_configured, check_installation
+        if not is_configured():
+            return {"installed": False, "reason": "GitHub App not configured on server"}
+        return await check_installation(github_org)
+    except Exception as e:
+        logger.warning(f"GitHub App installation check failed for {github_org}: {e}")
+        return {"installed": False, "reason": str(e)}
 
 
 @app.get("/api/org/setup/orgs")
@@ -618,7 +632,7 @@ async def org_setup(body: OrgSetup, authorization: str = Header(...)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create memory repo {owner}/{memory_repo_name}. "
-                   f"Check that your GitHub token has the 'repo' scope.",
+                   f"Ensure the Egregore GitHub App is installed on {owner}.",
         )
 
     # 5. Init memory structure
@@ -1043,8 +1057,8 @@ if [ -z "$GITHUB_TOKEN" ] || [ "$NEEDS_CLI_AUTH" = "true" ]; then
   echo "  Sign in with GitHub to complete setup."
   echo ""
 
-  CLIENT_ID="Ov23lizB4nYEeIRsHTdb"
-  DEVICE_SCOPE="repo,read:org"
+  CLIENT_ID="Iv23li2obNsAjakoK2RE"
+  DEVICE_SCOPE=""
 
   DEVICE_RESP=$(curl -s -X POST "https://github.com/login/device/code" \\
     -H "Accept: application/json" \\
@@ -1434,8 +1448,8 @@ async def org_telegram_membership(slug: str, authorization: str = Header(...)):
 
 @app.get("/api/auth/github/client-id")
 async def github_client_id():
-    """Return the GitHub OAuth client ID for the web flow."""
-    return {"client_id": GITHUB_CLIENT_ID}
+    """Return the GitHub App client ID for the web flow (falls back to legacy OAuth App)."""
+    return {"client_id": GITHUB_APP_CLIENT_ID or GITHUB_CLIENT_ID}
 
 
 # =============================================================================
@@ -1771,7 +1785,7 @@ async def org_invite(body: OrgInvite, authorization: str = Header(...)):
         github_result = {"status": "collaborator_invited"}
     else:
         logger.warning(f"Failed to add {body.github_username} as collaborator to {owner}/{body.repo_name}")
-        github_result = {"status": "collaborator_failed", "reason": "Check token scopes (needs 'repo')"}
+        github_result = {"status": "collaborator_failed", "reason": "Ensure the Egregore GitHub App is installed on this org"}
 
     # --- Slug resolution (only needed for legacy auth path) ---
     config = {}
@@ -1883,8 +1897,8 @@ async def org_invite_info(token: str):
 async def org_invite_accept(invite_token: str, authorization: str = Header(...)):
     """Accept an invite. Verifies invitee identity, registers them, returns setup token.
 
-    The invitee's GitHub token (repo,read:org scope) is passed through to the setup token
-    so the CLI can clone repos without a separate device flow auth.
+    The invitee's GitHub token is passed through to the setup token.
+    With the GitHub App, repo operations use installation tokens server-side.
     """
     token = authorization.replace("Bearer ", "").strip()
 
