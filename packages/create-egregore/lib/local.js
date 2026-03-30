@@ -6,7 +6,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { deviceFlow } = require("./auth");
+const { deviceFlow, openBrowser } = require("./auth");
 const {
   ghApi,
   acceptPendingInvitations,
@@ -21,6 +21,9 @@ const {
 // Template repo for new egregore instances (OSS)
 const TEMPLATE_OWNER = "egregore-labs";
 const TEMPLATE_REPO = "egregore";
+
+// GitHub App installation URL
+const APP_INSTALL_URL = "https://github.com/apps/egregore-labs/installations/new";
 
 // ── GitHub API helpers ──────────────────────────────────────────────
 
@@ -179,8 +182,15 @@ function createSymlink(egregoreDir, memoryDir, ui) {
 // ── Flow 1: Founder (local mode) ───────────────────────────────────
 
 async function localFounderFlow(ui) {
-  // 1. GitHub auth
-  ui.info("Let's set up Egregore. First, sign in with GitHub.\n");
+  // 1. Install GitHub App — grants Egregore access to the repos the user selects
+  ui.info("Let's set up Egregore.\n");
+  ui.info("First, install the Egregore app on your GitHub account.");
+  ui.info("You'll choose exactly which repos to share.\n");
+  openBrowser(APP_INSTALL_URL);
+  await ui.prompt("Press Enter when done...");
+
+  // 2. GitHub auth (auto-approved — user just authorized during App install)
+  ui.info("");
   let githubToken;
   try {
     githubToken = await deviceFlow(ui);
